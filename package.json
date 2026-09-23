@@ -4,11 +4,11 @@
   "description": "Connecta: global text, video and voice calling (Electron desktop + web PWA + Node backend).",
   "private": true,
   "scripts": {
-    "setup": "npm --prefix server install && npm --prefix desktop install",
+    "setup": "cd server && npm install && cd ../desktop && npm install",
     "dev": "node scripts/dev.js desktop",
     "dev:web": "node scripts/dev.js web",
-    "server": "npm --prefix server start",
-    "desktop": "npm --prefix desktop start"
+    "server": "cd server && npm start",
+    "desktop": "cd desktop && npm start"
   },
   "engines": {
     "node": ">=18"
