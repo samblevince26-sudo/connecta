@@ -27,7 +27,9 @@ session token is stored in the OS keychain; in the browser it falls back to
   typing indicators, read state and presence instantly.
 - **Group text chat** — named multi-party conversations with member rosters,
   persistent history, per-member unread badges, and live delivery to every
-  online member.
+  online member. Members can be added after creation; any member may leave, and
+  the creator can remove others. Roster changes propagate live, and a group is
+  deleted automatically once its last member leaves.
 - **Calls** — media flows peer-to-peer over WebRTC. The server only relays
   signaling (SDP offers/answers and ICE candidates); audio/video never touches it.
   A public STUN server is used by default; a TURN server is required for calls that
