@@ -145,6 +145,10 @@ function handleMessage(ws, msg) {
       return handleGroupRead(ws, msg);
     case 'group:addmember':
       return handleGroupAddMember(ws, msg);
+    case 'group:leave':
+      return handleChatGroupLeave(ws, msg);
+    case 'group:remove':
+      return handleGroupRemove(ws, msg);
     case 'presence:subscribe':
       return handlePresenceSubscribe(ws);
     default:
@@ -423,6 +427,42 @@ function handleGroupAddMember(ws, msg) {
   // their client picks up the group live.
   for (const member of group.members) {
     send(member.id, { type: 'group:member-added', group, addedUser, added });
+  }
+}
+
+function handleChatGroupLeave(ws, msg) {
+  const groupId = String(msg.groupId || '');
+  const userId = ws.userId;
+  if (!db.isGroupMember(groupId, userId)) throw new Error('Not a member of this group.');
+  const leavingUser = db.getUserById(userId);
+  const group = db.removeGroupMember(groupId, userId);
+  // Tell the leaver their client should drop the group.
+  sendTo(ws, { type: 'group:left', groupId });
+  // If the group still exists, push the refreshed roster to those who remain.
+  if (group) {
+    for (const member of group.members) {
+      send(member.id, { type: 'group:member-left', group, leftUser: leavingUser });
+    }
+  }
+}
+
+function handleGroupRemove(ws, msg) {
+  const groupId = String(msg.groupId || '');
+  const targetId = String(msg.userId || '');
+  const group = db.getGroup(groupId);
+  if (!group) throw new Error('Group not found.');
+  if (group.createdBy !== ws.userId) throw new Error('Only the group creator can remove members.');
+  if (targetId === group.createdBy) throw new Error('The creator cannot be removed.');
+  if (!db.isGroupMember(groupId, targetId)) throw new Error('That user is not a member.');
+
+  const removedUser = db.getUserById(targetId);
+  const refreshed = db.removeGroupMember(groupId, targetId);
+  // Notify the removed user so their client drops the group.
+  send(targetId, { type: 'group:removed', groupId, removedBy: ws.userId });
+  if (refreshed) {
+    for (const member of refreshed.members) {
+      send(member.id, { type: 'group:member-removed', group: refreshed, removedUser });
+    }
   }
 }
 

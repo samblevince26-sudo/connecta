@@ -104,7 +104,9 @@
             </div>
           </div>
           <div class="conv-actions">
+            <button id="members-btn" class="action-btn hidden" title="Members">👥</button>
             <button id="add-member-btn" class="action-btn hidden" title="Add member">➕</button>
+            <button id="leave-group-btn" class="action-btn danger hidden" title="Leave group">🚪</button>
             <button id="voice-btn" class="action-btn" title="Voice call">🎙</button>
             <button id="video-btn" class="action-btn" title="Video call">📹</button>
           </div>
@@ -190,6 +192,17 @@
       <ul id="add-member-list" class="picker-list"></ul>
       <div class="modal-actions">
         <button id="add-member-cancel" class="btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================= MEMBERS MODAL ============================= -->
+  <div id="members-modal" class="modal hidden">
+    <div class="modal-card picker-card">
+      <h2>Members</h2>
+      <ul id="members-list" class="picker-list"></ul>
+      <div class="modal-actions">
+        <button id="members-cancel" class="btn">Close</button>
       </div>
     </div>
   </div>

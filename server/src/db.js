@@ -147,6 +147,10 @@ const stmts = {
   addGroupMember: db.prepare(
     'INSERT OR IGNORE INTO group_members (group_id, user_id, joined_at) VALUES (?, ?, ?)'
   ),
+  deleteGroupMember: db.prepare(
+    'DELETE FROM group_members WHERE group_id = ? AND user_id = ?'
+  ),
+  deleteGroup: db.prepare('DELETE FROM groups WHERE id = ?'),
   listGroupsForUser: db.prepare(
     `SELECT g.id, g.name, g.created_by, g.created_at
        FROM groups g JOIN group_members m ON m.group_id = g.id
@@ -333,6 +337,17 @@ const data = {
     if (stmts.isGroupMember.get(groupId, userId)) return false;
     stmts.addGroupMember.run(groupId, userId, Date.now());
     return true;
+  },
+
+  // Removes a member; deletes the group entirely once it becomes empty.
+  // Returns the refreshed group, or null if the group was deleted.
+  removeGroupMember(groupId, userId) {
+    stmts.deleteGroupMember.run(groupId, userId);
+    if (stmts.groupMembers.all(groupId).length === 0) {
+      stmts.deleteGroup.run(groupId);
+      return null;
+    }
+    return data.getGroup(groupId);
   },
 
   listGroups(userId) {

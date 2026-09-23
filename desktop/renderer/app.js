@@ -79,6 +79,9 @@ const el = {
   gcPickerList: $('gc-picker-list'), gcCancel: $('gc-cancel'), gcCreate: $('gc-create'),
   addMemberBtn: $('add-member-btn'), addMemberModal: $('add-member-modal'),
   addMemberList: $('add-member-list'), addMemberCancel: $('add-member-cancel'),
+  leaveGroupBtn: $('leave-group-btn'), membersBtn: $('members-btn'),
+  membersModal: $('members-modal'), membersList: $('members-list'),
+  membersCancel: $('members-cancel'),
   toast: $('toast'),
 };
 
@@ -360,6 +363,18 @@ function onWsMessage(msg) {
     case 'group:member-added':
       onGroupMemberAdded(msg);
       break;
+    case 'group:member-left':
+      onGroupMemberLeft(msg);
+      break;
+    case 'group:member-removed':
+      onGroupMemberRemoved(msg);
+      break;
+    case 'group:left':
+      onGroupLeftOrRemoved(msg.groupId, 'You left the group.');
+      break;
+    case 'group:removed':
+      onGroupLeftOrRemoved(msg.groupId, 'You were removed from the group.');
+      break;
     case 'error':
       toast(msg.error, true);
       break;
@@ -456,6 +471,8 @@ async function openConversation(user) {
   el.voiceBtn.classList.remove('hidden');
   el.videoBtn.classList.remove('hidden');
   el.addMemberBtn.classList.add('hidden');
+  el.leaveGroupBtn.classList.add('hidden');
+  el.membersBtn.classList.add('hidden');
   el.emptyState.classList.add('hidden');
   el.conversation.classList.remove('hidden');
   el.peerName.textContent = user.displayName;
@@ -1078,6 +1095,8 @@ async function openGroupConversation(group) {
   el.voiceBtn.classList.add('hidden');
   el.videoBtn.classList.add('hidden');
   el.addMemberBtn.classList.remove('hidden');
+  el.leaveGroupBtn.classList.remove('hidden');
+  el.membersBtn.classList.remove('hidden');
   el.emptyState.classList.add('hidden');
   el.conversation.classList.remove('hidden');
   el.peerName.textContent = group.name;
@@ -1234,6 +1253,96 @@ function onGroupMemberAdded(msg) {
 
 el.addMemberBtn.addEventListener('click', openAddMemberModal);
 el.addMemberCancel.addEventListener('click', closeAddMemberModal);
+
+// ---------------------------------------------------------------------------
+// Leave group / manage members (removal is creator-only)
+// ---------------------------------------------------------------------------
+function isGroupCreator(group) {
+  return Boolean(group) && group.createdBy === state.me.id;
+}
+
+function refreshRoster(group) {
+  const idx = state.groups.findIndex((g) => g.id === group.id);
+  if (idx >= 0) state.groups[idx] = group;
+  if (state.activeGroup && state.activeGroup.id === group.id) {
+    state.activeGroup = group;
+    el.peerStatus.textContent = `${group.members.length} members`;
+    if (!el.membersModal.classList.contains('hidden')) renderMembersList();
+    if (!el.addMemberModal.classList.contains('hidden')) renderAddMemberList();
+  }
+  renderGroups();
+}
+
+function openMembersModal() {
+  if (!state.activeGroup) return;
+  renderMembersList();
+  el.membersModal.classList.remove('hidden');
+}
+function closeMembersModal() { el.membersModal.classList.add('hidden'); }
+
+function renderMembersList() {
+  const group = state.activeGroup;
+  el.membersList.innerHTML = '';
+  if (!group) return;
+  const creator = isGroupCreator(group);
+  for (const m of group.members) {
+    const li = document.createElement('li');
+    const isSelf = m.id === state.me.id;
+    const role = m.id === group.createdBy ? ' · Creator' : '';
+    li.innerHTML = `
+      <div class="avatar">${escapeHtml(initials(m.displayName))}</div>
+      <span>${escapeHtml(m.displayName)}${isSelf ? ' (you)' : ''}${role}</span>`;
+    // Only the creator can remove others; nobody can remove the creator or self.
+    if (creator && !isSelf && m.id !== group.createdBy) {
+      const btn = document.createElement('button');
+      btn.className = 'btn danger';
+      btn.textContent = 'Remove';
+      btn.addEventListener('click', () => {
+        wsSend({ type: 'group:remove', groupId: group.id, userId: m.id });
+      });
+      li.appendChild(btn);
+    }
+    el.membersList.appendChild(li);
+  }
+}
+
+function leaveGroup() {
+  const group = state.activeGroup;
+  if (!group) return;
+  if (!confirm(`Leave "${group.name}"?`)) return;
+  wsSend({ type: 'group:leave', groupId: group.id });
+}
+
+function onGroupMemberLeft(msg) {
+  refreshRoster(msg.group);
+  if (msg.leftUser && msg.leftUser.id !== state.me.id) {
+    toast(`${msg.leftUser.displayName} left ${msg.group.name}`);
+  }
+}
+
+function onGroupMemberRemoved(msg) {
+  refreshRoster(msg.group);
+  if (msg.removedUser && msg.removedUser.id !== state.me.id) {
+    toast(`${msg.removedUser.displayName} was removed from ${msg.group.name}`);
+  }
+}
+
+// The local user left or was removed: drop the group entirely from this client.
+function onGroupLeftOrRemoved(groupId, message) {
+  const idx = state.groups.findIndex((g) => g.id === groupId);
+  if (idx >= 0) state.groups.splice(idx, 1);
+  delete state.groupUnread[groupId];
+  delete state.groupPreview[groupId];
+  closeMembersModal();
+  closeAddMemberModal();
+  if (state.activeGroup && state.activeGroup.id === groupId) closeConversation();
+  renderGroups();
+  toast(message);
+}
+
+el.membersBtn.addEventListener('click', openMembersModal);
+el.membersCancel.addEventListener('click', closeMembersModal);
+el.leaveGroupBtn.addEventListener('click', leaveGroup);
 
 // ---------------------------------------------------------------------------
 // Boot
