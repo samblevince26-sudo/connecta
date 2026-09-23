@@ -11,6 +11,10 @@ const state = {
   wsReady: false,
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
   contacts: [],          // [{id, username, displayName, online}]
+  groups: [],            // [{id, name, createdBy, members:[...]}]
+  groupUnread: {},       // groupId -> unread count
+  groupPreview: {},      // groupId -> last message preview text
+  activeGroup: null,     // group object of the open group conversation
   presence: {},          // userId -> bool
   unread: {},            // userId -> count
   activePeer: null,      // user object of open conversation
@@ -70,6 +74,9 @@ const el = {
   groupCallBtn: $('group-call-btn'), groupPickerModal: $('group-picker-modal'),
   pickerList: $('picker-list'), pickerCancel: $('picker-cancel'), pickerStart: $('picker-start'),
   remoteGrid: $('remote-grid'),
+  groupList: $('group-list'), newGroupBtn: $('new-group-btn'),
+  groupChatModal: $('group-chat-modal'), gcName: $('gc-name'),
+  gcPickerList: $('gc-picker-list'), gcCancel: $('gc-cancel'), gcCreate: $('gc-create'),
   toast: $('toast'),
 };
 
@@ -221,6 +228,7 @@ async function afterAuth(token, user) {
   showApp();
   connectWebSocket();
   await loadContacts();
+  await loadGroups();
   credStore.save({ serverUrl: state.serverUrl, token, user });
 }
 
@@ -341,6 +349,12 @@ function onWsMessage(msg) {
     case 'groupcall:peer-left':
       onGroupPeerLeft(msg);
       break;
+    case 'group:created':
+      onChatGroupCreated(msg);
+      break;
+    case 'groupmsg:new':
+      onGroupMessage(msg.message);
+      break;
     case 'error':
       toast(msg.error, true);
       break;
@@ -433,12 +447,16 @@ el.searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSea
 // ---------------------------------------------------------------------------
 async function openConversation(user) {
   state.activePeer = user;
+  state.activeGroup = null;
+  el.voiceBtn.classList.remove('hidden');
+  el.videoBtn.classList.remove('hidden');
   el.emptyState.classList.add('hidden');
   el.conversation.classList.remove('hidden');
   el.peerName.textContent = user.displayName;
   el.peerAvatar.textContent = initials(user.displayName);
   updatePeerStatus();
   renderContacts();
+  renderGroups();
 
   el.messages.innerHTML = '';
   try {
@@ -459,8 +477,10 @@ async function openConversation(user) {
 
 function closeConversation() {
   state.activePeer = null;
+  state.activeGroup = null;
   el.conversation.classList.add('hidden');
   el.emptyState.classList.remove('hidden');
+  renderGroups();
 }
 
 function updatePeerStatus() {
@@ -512,11 +532,17 @@ function markThreadRead(peerId) {
 
 function sendMessage() {
   const body = el.messageInput.value.trim();
-  if (!body || !state.activePeer) return;
-  wsSend({ type: 'message:send', recipientId: state.activePeer.id, body });
+  if (!body) return;
+  if (state.activeGroup) {
+    wsSend({ type: 'groupmsg:send', groupId: state.activeGroup.id, body });
+  } else if (state.activePeer) {
+    wsSend({ type: 'message:send', recipientId: state.activePeer.id, body });
+    wsSend({ type: 'typing', peerId: state.activePeer.id, isTyping: false });
+  } else {
+    return;
+  }
   el.messageInput.value = '';
   el.messageInput.style.height = 'auto';
-  wsSend({ type: 'typing', peerId: state.activePeer.id, isTyping: false });
 }
 
 el.sendBtn.addEventListener('click', sendMessage);
@@ -1011,6 +1037,141 @@ function resetGroup() {
 el.groupCallBtn.addEventListener('click', openGroupPicker);
 el.pickerCancel.addEventListener('click', closeGroupPicker);
 el.pickerStart.addEventListener('click', startGroupCallFromPicker);
+
+// ---------------------------------------------------------------------------
+// Group text chat
+// ---------------------------------------------------------------------------
+async function loadGroups() {
+  const { groups, unread } = await api('/groups');
+  state.groups = groups;
+  state.groupUnread = unread || {};
+  renderGroups();
+}
+
+function renderGroups() {
+  el.groupList.innerHTML = '';
+  for (const g of state.groups) {
+    const li = document.createElement('li');
+    const active = state.activeGroup && state.activeGroup.id === g.id;
+    li.className = 'contact' + (active ? ' active' : '');
+    li.innerHTML = `
+      <div class="avatar">${escapeHtml(initials(g.name))}</div>
+      <div class="c-info">
+        <div class="c-name">${escapeHtml(g.name)}</div>
+        <div class="c-preview">${escapeHtml(state.groupPreview[g.id] || `${g.members.length} members`)}</div>
+      </div>
+      ${state.groupUnread[g.id] ? `<span class="badge">${state.groupUnread[g.id]}</span>` : ''}`;
+    li.addEventListener('click', () => openGroupConversation(g));
+    el.groupList.appendChild(li);
+  }
+}
+
+async function openGroupConversation(group) {
+  state.activeGroup = group;
+  state.activePeer = null;
+  el.voiceBtn.classList.add('hidden');
+  el.videoBtn.classList.add('hidden');
+  el.emptyState.classList.add('hidden');
+  el.conversation.classList.remove('hidden');
+  el.peerName.textContent = group.name;
+  el.peerAvatar.textContent = initials(group.name);
+  el.peerStatus.textContent = `${group.members.length} members`;
+  el.peerStatus.className = 'conv-status';
+  renderContacts();
+  renderGroups();
+
+  el.messages.innerHTML = '';
+  try {
+    const { messages } = await api(`/groups/${group.id}/messages`);
+    for (const m of messages) appendGroupMessage(m);
+    scrollToBottom();
+    state.groupUnread[group.id] = 0;
+    renderGroups();
+    if (messages.length) {
+      wsSend({ type: 'group:read', groupId: group.id, lastMsgId: messages[messages.length - 1].id });
+    }
+  } catch (err) { toast(err.message, true); }
+  el.messageInput.focus();
+}
+
+function appendGroupMessage(m) {
+  const mine = m.senderId === state.me.id;
+  const div = document.createElement('div');
+  div.className = 'msg ' + (mine ? 'me' : 'them');
+  const label = mine ? '' : `<span class="sender">${escapeHtml(senderName(m.senderId))}</span>`;
+  div.innerHTML = `${label}${escapeHtml(m.body)}<span class="time">${fmtTime(m.createdAt)}</span>`;
+  el.messages.appendChild(div);
+  scrollToBottom();
+  state.groupPreview[m.groupId] = (mine ? 'You: ' : senderName(m.senderId) + ': ') + m.body;
+  renderGroups();
+}
+
+function onGroupMessage(m) {
+  if (state.activeGroup && state.activeGroup.id === m.groupId) {
+    appendGroupMessage(m);
+    wsSend({ type: 'group:read', groupId: m.groupId, lastMsgId: m.id });
+  } else {
+    state.groupPreview[m.groupId] = senderName(m.senderId) + ': ' + m.body;
+    if (m.senderId !== state.me.id) {
+      state.groupUnread[m.groupId] = (state.groupUnread[m.groupId] || 0) + 1;
+      toast(`New message in ${groupName(m.groupId)}`);
+    }
+    renderGroups();
+  }
+}
+
+function groupName(id) {
+  const g = state.groups.find((x) => x.id === id);
+  return g ? g.name : 'a group';
+}
+
+function onChatGroupCreated(msg) {
+  if (!state.groups.some((g) => g.id === msg.group.id)) state.groups.push(msg.group);
+  renderGroups();
+  toast(`Group "${msg.group.name}" ready`);
+}
+
+function openGroupChatModal() {
+  el.gcName.value = '';
+  renderGcPicker();
+  el.groupChatModal.classList.remove('hidden');
+}
+function closeGroupChatModal() { el.groupChatModal.classList.add('hidden'); }
+
+function renderGcPicker() {
+  el.gcPickerList.innerHTML = '';
+  if (!state.contacts.length) {
+    el.gcPickerList.innerHTML = '<li><small style="color:var(--text-dim)">Add contacts first to create a group.</small></li>';
+    return;
+  }
+  for (const c of state.contacts) {
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <input type="checkbox" value="${escapeHtml(c.id)}" />
+      <div class="avatar">${escapeHtml(initials(c.displayName))}</div>
+      <span>${escapeHtml(c.displayName)}</span>`;
+    li.addEventListener('click', (e) => {
+      if (e.target.tagName !== 'INPUT') {
+        const cb = li.querySelector('input');
+        cb.checked = !cb.checked;
+      }
+    });
+    el.gcPickerList.appendChild(li);
+  }
+}
+
+function createGroupChat() {
+  const name = el.gcName.value.trim();
+  if (!name) { toast('Give the group a name', true); return; }
+  const ids = [...el.gcPickerList.querySelectorAll('input:checked')].map((i) => i.value);
+  if (!ids.length) { toast('Select at least one member', true); return; }
+  wsSend({ type: 'group:create', name, memberIds: ids });
+  closeGroupChatModal();
+}
+
+el.newGroupBtn.addEventListener('click', openGroupChatModal);
+el.gcCancel.addEventListener('click', closeGroupChatModal);
+el.gcCreate.addEventListener('click', createGroupChat);
 
 // ---------------------------------------------------------------------------
 // Boot

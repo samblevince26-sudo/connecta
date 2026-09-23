@@ -75,6 +75,12 @@
       <div id="search-results" class="search-results hidden"></div>
 
       <div class="contacts-header">
+        <span>Groups</span>
+        <button id="new-group-btn" class="icon-btn" title="New group chat">+</button>
+      </div>
+      <ul id="group-list" class="contact-list groups"></ul>
+
+      <div class="contacts-header">
         <span>Conversations</span>
         <span id="connection-dot" class="dot" title="Connection status"></span>
       </div>
@@ -157,6 +163,21 @@
       <div class="modal-actions">
         <button id="picker-cancel" class="btn">Cancel</button>
         <button id="picker-start" class="btn primary">Start call</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== NEW GROUP CHAT MODAL ======================= -->
+  <div id="group-chat-modal" class="modal hidden">
+    <div class="modal-card picker-card">
+      <h2>New group chat</h2>
+      <label class="gc-name-label">Group name
+        <input id="gc-name" maxlength="64" placeholder="e.g. Weekend crew" />
+      </label>
+      <ul id="gc-picker-list" class="picker-list"></ul>
+      <div class="modal-actions">
+        <button id="gc-cancel" class="btn">Cancel</button>
+        <button id="gc-create" class="btn primary">Create group</button>
       </div>
     </div>
   </div>

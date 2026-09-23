@@ -137,6 +137,12 @@ function handleMessage(ws, msg) {
       return handleGroupSignal(ws, msg);
     case 'groupcall:leave':
       return handleGroupLeave(ws, msg);
+    case 'group:create':
+      return handleChatGroupCreate(ws, msg);
+    case 'groupmsg:send':
+      return handleGroupMsgSend(ws, msg);
+    case 'group:read':
+      return handleGroupRead(ws, msg);
     case 'presence:subscribe':
       return handlePresenceSubscribe(ws);
     default:
@@ -364,6 +370,44 @@ function handleGroupLeave(ws, msg) {
     send(other, { type: 'groupcall:peer-left', callId, peerId: ws.userId });
   }
   if (call.participants.size === 0) groupCalls.delete(callId);
+}
+
+// ---------------------------------------------------------------------------
+// Group text chat
+// ---------------------------------------------------------------------------
+function handleChatGroupCreate(ws, msg) {
+  const name = String(msg.name || '').trim();
+  if (!name || name.length > 64) throw new Error('Group name must be 1-64 characters.');
+  const memberIds = Array.isArray(msg.memberIds) ? msg.memberIds : [];
+  for (const id of memberIds) {
+    if (!db.getUserById(id)) throw new Error('One or more members do not exist.');
+  }
+  const group = db.createGroup({ name, creatorId: ws.userId, memberIds });
+  for (const member of group.members) {
+    send(member.id, { type: 'group:created', group });
+  }
+}
+
+function handleGroupMsgSend(ws, msg) {
+  const groupId = String(msg.groupId || '');
+  const body = String(msg.body || '').trim();
+  if (!groupId) throw new Error('groupId is required.');
+  if (!body) throw new Error('Message body cannot be empty.');
+  if (body.length > 4000) throw new Error('Message too long (max 4000 characters).');
+  if (!db.isGroupMember(groupId, ws.userId)) throw new Error('Not a member of this group.');
+
+  const message = db.saveGroupMessage({ groupId, senderId: ws.userId, body });
+  const group = db.getGroup(groupId);
+  for (const member of group.members) {
+    send(member.id, { type: 'groupmsg:new', message });
+  }
+}
+
+function handleGroupRead(ws, msg) {
+  const groupId = String(msg.groupId || '');
+  const lastMsgId = parseInt(msg.lastMsgId || '0', 10);
+  if (!groupId || !db.isGroupMember(groupId, ws.userId)) return;
+  db.markGroupRead(groupId, ws.userId, lastMsgId);
 }
 
 module.exports = { attachWebSocketServer, isOnline };

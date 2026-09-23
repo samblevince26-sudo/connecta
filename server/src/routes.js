@@ -85,4 +85,16 @@ router.get('/calls/history', requireAuth, (req, res) => {
   res.json({ calls: db.callHistory(req.userId) });
 });
 
+router.get('/groups', requireAuth, (req, res) => {
+  res.json({ groups: db.listGroups(req.userId), unread: db.groupUnreadCounts(req.userId) });
+});
+
+router.get('/groups/:id/messages', requireAuth, (req, res) => {
+  if (!db.isGroupMember(req.params.id, req.userId)) {
+    return res.status(403).json({ error: 'Not a member of this group.' });
+  }
+  const limit = Math.min(parseInt(req.query.limit || '200', 10) || 200, 500);
+  res.json({ messages: db.getGroupMessages(req.params.id, limit) });
+});
+
 module.exports = router;

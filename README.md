@@ -25,6 +25,9 @@ session token is stored in the OS keychain; in the browser it falls back to
   (`better-sqlite3`). Swap in Postgres for horizontal scale (see below).
 - **Real-time messaging** — a WebSocket connection per client delivers messages,
   typing indicators, read state and presence instantly.
+- **Group text chat** — named multi-party conversations with member rosters,
+  persistent history, per-member unread badges, and live delivery to every
+  online member.
 - **Calls** — media flows peer-to-peer over WebRTC. The server only relays
   signaling (SDP offers/answers and ICE candidates); audio/video never touches it.
   A public STUN server is used by default; a TURN server is required for calls that

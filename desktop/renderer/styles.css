@@ -185,6 +185,12 @@ input:focus, textarea:focus { border-color: var(--accent); }
 }
 .toast.error { border-color: var(--danger); }
 
+/* Groups section in sidebar */
+.contact-list.groups { flex: 0 0 auto; max-height: 190px; }
+.contact-list.groups:empty { display: none; }
+.gc-name-label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-dim); margin-bottom: 12px; }
+.msg .sender { display: block; font-size: 11px; font-weight: 700; opacity: .75; margin-bottom: 2px; }
+
 /* Group call grid */
 .remote-grid {
   position: absolute; inset: 0; display: grid; gap: 8px; padding: 8px;
