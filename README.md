@@ -54,6 +54,28 @@ session token is stored in the OS keychain; in the browser it falls back to
 
 ---
 
+## Quick start (one command)
+
+From the project root, with **Node 18+** installed:
+
+```bash
+npm run setup     # installs server + desktop dependencies (first time only)
+npm run dev       # starts the backend, waits for it, then opens the desktop app
+```
+
+`npm run dev` also makes the web PWA available at http://localhost:4000. To run
+the backend + PWA only (no Electron), use:
+
+```bash
+npm run dev:web
+```
+
+The launcher auto-copies `server/.env.example` to `server/.env` on first run —
+edit `JWT_SECRET` there before deploying. Press Ctrl+C to stop everything.
+The manual, per-component steps are below if you prefer them.
+
+---
+
 ## 1. Run the server
 
 ```bash

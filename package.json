@@ -1,0 +1,17 @@
+{
+  "name": "connecta",
+  "version": "1.0.0",
+  "description": "Connecta: global text, video and voice calling (Electron desktop + web PWA + Node backend).",
+  "private": true,
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix desktop install",
+    "dev": "node scripts/dev.js desktop",
+    "dev:web": "node scripts/dev.js web",
+    "server": "npm --prefix server start",
+    "desktop": "npm --prefix desktop start"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
