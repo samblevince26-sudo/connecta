@@ -143,6 +143,8 @@ function handleMessage(ws, msg) {
       return handleGroupMsgSend(ws, msg);
     case 'group:read':
       return handleGroupRead(ws, msg);
+    case 'group:addmember':
+      return handleGroupAddMember(ws, msg);
     case 'presence:subscribe':
       return handlePresenceSubscribe(ws);
     default:
@@ -408,6 +410,20 @@ function handleGroupRead(ws, msg) {
   const lastMsgId = parseInt(msg.lastMsgId || '0', 10);
   if (!groupId || !db.isGroupMember(groupId, ws.userId)) return;
   db.markGroupRead(groupId, ws.userId, lastMsgId);
+}
+
+function handleGroupAddMember(ws, msg) {
+  const groupId = String(msg.groupId || '');
+  const userId = String(msg.userId || '');
+  if (!db.isGroupMember(groupId, ws.userId)) throw new Error('Not a member of this group.');
+  const added = db.addGroupMember(groupId, userId);
+  const group = db.getGroup(groupId);
+  const addedUser = db.getUserById(userId);
+  // Broadcast the refreshed roster to every member, including the new one so
+  // their client picks up the group live.
+  for (const member of group.members) {
+    send(member.id, { type: 'group:member-added', group, addedUser, added });
+  }
 }
 
 module.exports = { attachWebSocketServer, isOnline };

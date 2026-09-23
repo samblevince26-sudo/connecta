@@ -77,6 +77,8 @@ const el = {
   groupList: $('group-list'), newGroupBtn: $('new-group-btn'),
   groupChatModal: $('group-chat-modal'), gcName: $('gc-name'),
   gcPickerList: $('gc-picker-list'), gcCancel: $('gc-cancel'), gcCreate: $('gc-create'),
+  addMemberBtn: $('add-member-btn'), addMemberModal: $('add-member-modal'),
+  addMemberList: $('add-member-list'), addMemberCancel: $('add-member-cancel'),
   toast: $('toast'),
 };
 
@@ -355,6 +357,9 @@ function onWsMessage(msg) {
     case 'groupmsg:new':
       onGroupMessage(msg.message);
       break;
+    case 'group:member-added':
+      onGroupMemberAdded(msg);
+      break;
     case 'error':
       toast(msg.error, true);
       break;
@@ -450,6 +455,7 @@ async function openConversation(user) {
   state.activeGroup = null;
   el.voiceBtn.classList.remove('hidden');
   el.videoBtn.classList.remove('hidden');
+  el.addMemberBtn.classList.add('hidden');
   el.emptyState.classList.add('hidden');
   el.conversation.classList.remove('hidden');
   el.peerName.textContent = user.displayName;
@@ -1071,6 +1077,7 @@ async function openGroupConversation(group) {
   state.activePeer = null;
   el.voiceBtn.classList.add('hidden');
   el.videoBtn.classList.add('hidden');
+  el.addMemberBtn.classList.remove('hidden');
   el.emptyState.classList.add('hidden');
   el.conversation.classList.remove('hidden');
   el.peerName.textContent = group.name;
@@ -1172,6 +1179,61 @@ function createGroupChat() {
 el.newGroupBtn.addEventListener('click', openGroupChatModal);
 el.gcCancel.addEventListener('click', closeGroupChatModal);
 el.gcCreate.addEventListener('click', createGroupChat);
+
+// ---------------------------------------------------------------------------
+// Add members to an existing group
+// ---------------------------------------------------------------------------
+function openAddMemberModal() {
+  if (!state.activeGroup) return;
+  renderAddMemberList();
+  el.addMemberModal.classList.remove('hidden');
+}
+function closeAddMemberModal() { el.addMemberModal.classList.add('hidden'); }
+
+function renderAddMemberList() {
+  const group = state.activeGroup;
+  el.addMemberList.innerHTML = '';
+  if (!group) return;
+  const candidates = state.contacts.filter(
+    (c) => !group.members.some((m) => m.id === c.id)
+  );
+  if (!candidates.length) {
+    el.addMemberList.innerHTML = '<li><small style="color:var(--text-dim)">All your contacts are already in this group.</small></li>';
+    return;
+  }
+  for (const c of candidates) {
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <div class="avatar">${escapeHtml(initials(c.displayName))}</div>
+      <span>${escapeHtml(c.displayName)}</span>`;
+    const btn = document.createElement('button');
+    btn.className = 'btn';
+    btn.textContent = 'Add';
+    btn.addEventListener('click', () => {
+      wsSend({ type: 'group:addmember', groupId: group.id, userId: c.id });
+    });
+    li.appendChild(btn);
+    el.addMemberList.appendChild(li);
+  }
+}
+
+function onGroupMemberAdded(msg) {
+  const idx = state.groups.findIndex((g) => g.id === msg.group.id);
+  if (idx >= 0) state.groups[idx] = msg.group;
+  else state.groups.push(msg.group);
+  if (state.activeGroup && state.activeGroup.id === msg.group.id) {
+    state.activeGroup = msg.group;
+    el.peerStatus.textContent = `${msg.group.members.length} members`;
+    renderAddMemberList();
+  }
+  renderGroups();
+  if (msg.added && msg.addedUser) {
+    toast(`${msg.addedUser.displayName} added to ${msg.group.name}`);
+  }
+}
+
+el.addMemberBtn.addEventListener('click', openAddMemberModal);
+el.addMemberCancel.addEventListener('click', closeAddMemberModal);
 
 // ---------------------------------------------------------------------------
 // Boot

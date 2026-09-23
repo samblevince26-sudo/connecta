@@ -327,6 +327,14 @@ const data = {
     return Boolean(stmts.isGroupMember.get(groupId, userId));
   },
 
+  addGroupMember(groupId, userId) {
+    if (!stmts.groupById.get(groupId)) throw new Error('Group not found.');
+    if (!stmts.userById.get(userId)) throw new Error('User not found.');
+    if (stmts.isGroupMember.get(groupId, userId)) return false;
+    stmts.addGroupMember.run(groupId, userId, Date.now());
+    return true;
+  },
+
   listGroups(userId) {
     return stmts.listGroupsForUser.all(userId).map((g) => data.getGroup(g.id));
   },
