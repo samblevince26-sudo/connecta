@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1115" />
+  <meta name="description" content="Connecta — text, video and voice calls in your browser." />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; connect-src 'self' https: wss:; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; manifest-src 'self'" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Connecta</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <!-- ============================ AUTH SCREEN ============================ -->
+  <section id="auth-screen" class="screen auth-screen hidden">
+    <div class="auth-card">
+      <div class="brand">
+        <div class="brand-logo">C</div>
+        <h1>Connecta</h1>
+        <p class="tagline">Text, video and voice — anywhere in the world.</p>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="login">Sign in</button>
+        <button class="tab" data-tab="register">Create account</button>
+      </div>
+
+      <form id="login-form" class="auth-form">
+        <label>Username<input id="login-username" autocomplete="username" required /></label>
+        <label>Password<input id="login-password" type="password" autocomplete="current-password" required /></label>
+        <button type="submit" class="btn primary">Sign in</button>
+      </form>
+
+      <form id="register-form" class="auth-form hidden">
+        <label>Username<input id="reg-username" autocomplete="username" placeholder="3-32 chars" required /></label>
+        <label>Display name<input id="reg-display" placeholder="How friends see you" required /></label>
+        <label>Password<input id="reg-password" type="password" autocomplete="new-password" placeholder="Min 8 characters" required /></label>
+        <button type="submit" class="btn primary">Create account</button>
+      </form>
+
+      <div class="server-row">
+        <label class="inline">Server
+          <input id="server-url" value="http://localhost:4000" spellcheck="false" />
+        </label>
+      </div>
+
+      <p id="auth-error" class="error-text"></p>
+    </div>
+  </section>
+
+  <!-- ============================= MAIN APP ============================== -->
+  <section id="app-screen" class="screen app-screen hidden">
+    <aside class="sidebar">
+      <header class="sidebar-header">
+        <div class="me">
+          <div class="avatar" id="me-avatar">?</div>
+          <div class="me-info">
+            <div class="me-name" id="me-name">—</div>
+            <div class="me-status online">Online</div>
+          </div>
+        </div>
+        <button id="group-call-btn" class="icon-btn" title="Start group call">👥</button>
+        <button id="logout-btn" class="icon-btn" title="Sign out">⎋</button>
+      </header>
+
+      <div class="search-row">
+        <input id="search-input" placeholder="Find people to add…" spellcheck="false" />
+        <button id="search-btn" class="icon-btn" title="Search">⌕</button>
+      </div>
+      <div id="search-results" class="search-results hidden"></div>
+
+      <div class="contacts-header">
+        <span>Conversations</span>
+        <span id="connection-dot" class="dot" title="Connection status"></span>
+      </div>
+      <ul id="contact-list" class="contact-list"></ul>
+    </aside>
+
+    <main class="chat-panel">
+      <div id="empty-state" class="empty-state">
+        <div class="empty-logo">C</div>
+        <h2>Welcome to Connecta</h2>
+        <p>Search for a friend above, add them, then start texting or calling.</p>
+      </div>
+
+      <div id="conversation" class="conversation hidden">
+        <header class="conv-header">
+          <div class="conv-peer">
+            <div class="avatar" id="peer-avatar">?</div>
+            <div>
+              <div class="conv-name" id="peer-name">—</div>
+              <div class="conv-status" id="peer-status">Offline</div>
+            </div>
+          </div>
+          <div class="conv-actions">
+            <button id="voice-btn" class="action-btn" title="Voice call">🎙</button>
+            <button id="video-btn" class="action-btn" title="Video call">📹</button>
+          </div>
+        </header>
+
+        <div id="messages" class="messages"></div>
+        <div id="typing-indicator" class="typing-indicator"></div>
+
+        <footer class="composer">
+          <textarea id="message-input" placeholder="Type a message…" rows="1"></textarea>
+          <button id="send-btn" class="btn primary">Send</button>
+        </footer>
+      </div>
+    </main>
+  </section>
+
+  <!-- ============================ CALL OVERLAY =========================== -->
+  <div id="call-overlay" class="call-overlay hidden">
+    <div class="call-stage">
+      <video id="remote-video" class="remote-video" autoplay playsinline></video>
+      <div id="remote-grid" class="remote-grid hidden"></div>
+      <video id="local-video" class="local-video" autoplay playsinline muted></video>
+
+      <div id="call-status" class="call-status">Connecting…</div>
+      <div id="call-timer" class="call-timer hidden">00:00</div>
+
+      <div class="call-controls">
+        <button id="mute-btn" class="ctrl-btn" title="Mute">🎙</button>
+        <button id="cam-btn" class="ctrl-btn" title="Camera">📹</button>
+        <button id="end-call-btn" class="ctrl-btn end" title="End call">✕</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================= INCOMING CALL MODAL ======================= -->
+  <div id="incoming-modal" class="modal hidden">
+    <div class="modal-card incoming-card">
+      <div class="avatar big" id="incoming-avatar">?</div>
+      <h2 id="incoming-name">Incoming call</h2>
+      <p id="incoming-kind">Video call</p>
+      <div class="modal-actions">
+        <button id="decline-btn" class="btn danger">Decline</button>
+        <button id="answer-btn" class="btn success">Answer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================= GROUP CALL PICKER MODAL ===================== -->
+  <div id="group-picker-modal" class="modal hidden">
+    <div class="modal-card picker-card">
+      <h2>Start group call</h2>
+      <div class="picker-kind">
+        <label><input type="radio" name="gkind" value="video" checked /> Video</label>
+        <label><input type="radio" name="gkind" value="audio" /> Voice</label>
+      </div>
+      <ul id="picker-list" class="picker-list"></ul>
+      <div class="modal-actions">
+        <button id="picker-cancel" class="btn">Cancel</button>
+        <button id="picker-start" class="btn primary">Start call</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <audio id="ringtone" loop></audio>
+
+  <script src="/assets/app.js"></script>
+  <script src="/pwa.js"></script>
+</body>
+</html>

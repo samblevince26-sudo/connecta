@@ -1,0 +1,47 @@
+# Connecta: application server + coturn TURN relay.
+#
+# Usage:
+#   1. cp .env.example .env   and fill in JWT_SECRET / TURN_* values.
+#   2. docker compose up -d --build
+#
+# coturn runs with host networking so its full UDP relay port range works.
+# Clients reach coturn directly at TURN_HOST (your public IP/hostname); the app
+# server never talks to coturn — it only mints HMAC credentials for it.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      DB_FILE: /data/connecta.sqlite
+      TURN_HOST: ${TURN_HOST}
+      TURN_SECRET: ${TURN_SECRET}
+      TURN_TTL: ${TURN_TTL:-86400}
+    volumes:
+      - dbdata:/data
+    restart: unless-stopped
+
+  coturn:
+    image: coturn/coturn:4.6.2
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./coturn/turnserver.conf:/etc/turnserver.conf:ro
+      - turnlogs:/var/log/turnserver
+    command:
+      - -c
+      - /etc/turnserver.conf
+      - --static-auth-secret=${TURN_SECRET}
+      - --realm=${TURN_REALM:-connecta.local}
+      - --external-ip=${TURN_EXTERNAL_IP}
+
+volumes:
+  dbdata:
+  turnlogs:

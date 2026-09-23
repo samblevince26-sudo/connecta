@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+server/data
+**/*.sqlite
+**/*.sqlite-*
+server/.env
+.env
+.git
+desktop/dist
+coturn
