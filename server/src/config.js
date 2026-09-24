@@ -50,9 +50,15 @@ const config = {
   host: process.env.HOST || '0.0.0.0',
   jwtSecret: process.env.JWT_SECRET || 'dev-insecure-secret-change-me',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  dbDriver: (process.env.DB_DRIVER || 'sqlite').toLowerCase(),
   dbFile: process.env.DB_FILE || path.join(__dirname, '..', 'data', 'connecta.sqlite'),
+  databaseUrl: process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '',
   rtc: { baseIceServers, turn },
 };
+
+if ((config.dbDriver === 'postgres' || config.dbDriver === 'pg') && !config.databaseUrl) {
+  throw new Error('DB_DRIVER=postgres requires SUPABASE_DB_URL (or DATABASE_URL) to be set.');
+}
 
 // Returns the ICE server list for a given user. With TURN enabled this embeds
 // time-limited credentials (username = "<expiry>:<userId>", credential =

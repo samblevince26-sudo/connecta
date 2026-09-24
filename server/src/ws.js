@@ -47,9 +47,13 @@ function sendTo(ws, message) {
 
 function broadcastPresence(userId, online) {
   // Notify every contact of this user about the presence change.
-  for (const contact of db.listContacts(userId)) {
-    send(contact.id, { type: 'presence', userId, online });
-  }
+  return Promise.resolve(db.listContacts(userId))
+    .then((contacts) => {
+      for (const contact of contacts) {
+        send(contact.id, { type: 'presence', userId, online });
+      }
+    })
+    .catch(() => {});
 }
 
 function attachWebSocketServer(server) {
@@ -67,11 +71,11 @@ function attachWebSocketServer(server) {
       } catch {
         return sendTo(ws, { type: 'error', error: 'Invalid JSON.' });
       }
-      try {
-        handleMessage(ws, msg);
-      } catch (err) {
-        sendTo(ws, { type: 'error', error: err.message || 'Server error.' });
-      }
+      // handleMessage is async (the data layer may be Postgres); route both
+      // synchronous throws and rejected promises to the same error reply.
+      Promise.resolve()
+        .then(() => handleMessage(ws, msg))
+        .catch((err) => sendTo(ws, { type: 'error', error: err.message || 'Server error.' }));
     });
 
     ws.on('close', () => {
@@ -157,10 +161,10 @@ function handleMessage(ws, msg) {
   }
 }
 
-function handleAuth(ws, msg) {
+async function handleAuth(ws, msg) {
   const payload = verifyToken(msg.token || '');
   if (!payload) return sendTo(ws, { type: 'auth:error', error: 'Invalid or expired token.' });
-  const user = db.getUserById(payload.sub);
+  const user = await db.getUserById(payload.sub);
   if (!user) return sendTo(ws, { type: 'auth:error', error: 'User no longer exists.' });
 
   const firstSocket = !isOnline(user.id);
@@ -170,29 +174,29 @@ function handleAuth(ws, msg) {
   if (firstSocket) broadcastPresence(user.id, true);
 }
 
-function handleSendMessage(ws, msg) {
+async function handleSendMessage(ws, msg) {
   const senderId = ws.userId;
   const recipientId = String(msg.recipientId || '');
   const body = String(msg.body || '').trim();
   if (!recipientId) throw new Error('recipientId is required.');
   if (!body) throw new Error('Message body cannot be empty.');
   if (body.length > 4000) throw new Error('Message too long (max 4000 characters).');
-  if (!db.getUserById(recipientId)) throw new Error('Recipient not found.');
+  if (!(await db.getUserById(recipientId))) throw new Error('Recipient not found.');
 
-  const stored = db.saveMessage({ senderId, recipientId, body });
+  const stored = await db.saveMessage({ senderId, recipientId, body });
   const delivered = send(recipientId, { type: 'message:new', message: stored });
   if (delivered) {
-    db.markDelivered(recipientId, senderId);
+    await db.markDelivered(recipientId, senderId);
     stored.delivered = 1;
   }
   sendTo(ws, { type: 'message:sent', message: stored });
 }
 
-function handleMarkRead(ws, msg) {
+async function handleMarkRead(ws, msg) {
   const userId = ws.userId;
   const peerId = String(msg.peerId || '');
   if (!peerId) return;
-  db.markRead(userId, peerId);
+  await db.markRead(userId, peerId);
   send(peerId, { type: 'message:read', byUserId: userId });
 }
 
@@ -203,17 +207,17 @@ function handleTyping(ws, msg) {
   send(peerId, { type: 'typing', userId, isTyping: Boolean(msg.isTyping) });
 }
 
-function handleCallInitiate(ws, msg) {
+async function handleCallInitiate(ws, msg) {
   const callerId = ws.userId;
   const calleeId = String(msg.calleeId || '');
   const kind = msg.kind === 'audio' ? 'audio' : 'video';
-  const callee = db.getUserById(calleeId);
+  const callee = await db.getUserById(calleeId);
   if (!callee) throw new Error('Callee not found.');
   if (!isOnline(calleeId)) throw new Error('User is offline.');
 
-  const callId = db.logCall({ callerId, calleeId, kind });
+  const callId = await db.logCall({ callerId, calleeId, kind });
   activeCalls.set(callId, { callerId, calleeId });
-  const caller = db.getUserById(callerId);
+  const caller = await db.getUserById(callerId);
   send(calleeId, {
     type: 'call:incoming',
     callId,
@@ -232,13 +236,13 @@ function handleCallAccept(ws, msg) {
   send(call.callerId, { type: 'call:accepted', callId, iceServers: config.getIceServers(call.callerId) });
 }
 
-function handleCallReject(ws, msg) {
+async function handleCallReject(ws, msg) {
   const callId = String(msg.callId || '');
   const call = activeCalls.get(callId);
   if (!call) return;
   const reason = msg.reason || 'rejected';
   const other = ws.userId === call.callerId ? call.calleeId : call.callerId;
-  db.endCall(callId, reason);
+  await db.endCall(callId, reason);
   activeCalls.delete(callId);
   send(other, { type: 'call:ended', callId, reason });
 }
@@ -255,20 +259,20 @@ function handleCallSignal(ws, msg) {
   send(target, { type: 'call:signal', callId, signal: msg.signal });
 }
 
-function handleCallEnd(ws, msg) {
+async function handleCallEnd(ws, msg) {
   const callId = String(msg.callId || '');
   const call = activeCalls.get(callId);
   if (!call) return;
-  db.endCall(callId, 'ended');
+  await db.endCall(callId, 'ended');
   activeCalls.delete(callId);
   const other = ws.userId === call.callerId ? call.calleeId : call.callerId;
   send(other, { type: 'call:ended', callId, reason: 'ended' });
 }
 
-function handlePresenceSubscribe(ws) {
+async function handlePresenceSubscribe(ws) {
   const userId = ws.userId;
   const statuses = {};
-  for (const contact of db.listContacts(userId)) {
+  for (const contact of await db.listContacts(userId)) {
     statuses[contact.id] = isOnline(contact.id);
   }
   sendTo(ws, { type: 'presence:snapshot', statuses });
@@ -280,11 +284,11 @@ function handlePresenceSubscribe(ws) {
 // JOINS last creates offers to everyone already in the call; existing members
 // only answer.
 // ---------------------------------------------------------------------------
-function groupParticipantList(call, excludeId) {
+async function groupParticipantList(call, excludeId) {
   const out = [];
   for (const id of call.participants) {
     if (id === excludeId) continue;
-    const u = db.getUserById(id);
+    const u = await db.getUserById(id);
     if (u) out.push(u);
   }
   return out;
@@ -297,12 +301,12 @@ function handleGroupCreate(ws, msg) {
   sendTo(ws, { type: 'groupcall:created', callId, kind, peers: [] });
 }
 
-function handleGroupInvite(ws, msg) {
+async function handleGroupInvite(ws, msg) {
   const callId = String(msg.callId || '');
   const call = groupCalls.get(callId);
   if (!call) throw new Error('Group call not found.');
   if (!call.participants.has(ws.userId)) throw new Error('Not a participant.');
-  const from = db.getUserById(ws.userId);
+  const from = await db.getUserById(ws.userId);
   const ids = Array.isArray(msg.userIds) ? msg.userIds.slice(0, 15) : [];
   for (const id of ids) {
     if (!isOnline(id)) continue;
@@ -317,14 +321,15 @@ function handleGroupInvite(ws, msg) {
   }
 }
 
-function handleGroupJoin(ws, msg) {
+async function handleGroupJoin(ws, msg) {
   const callId = String(msg.callId || '');
   const call = groupCalls.get(callId);
   if (!call) throw new Error('Group call not found or already ended.');
   const userId = ws.userId;
   const isNew = !call.participants.has(userId);
-  const existing = groupParticipantList(call, userId);
+  const existing = await groupParticipantList(call, userId);
   call.participants.add(userId);
+  const joiner = await db.getUserById(userId);
 
   // Tell everyone already in the call that a new peer arrived. They wait for
   // the new peer's offer (no glare).
@@ -332,7 +337,7 @@ function handleGroupJoin(ws, msg) {
     send(peer.id, {
       type: 'groupcall:peer-joined',
       callId,
-      peer: db.getUserById(userId),
+      peer: joiner,
       iceServers: config.getIceServers(peer.id),
     });
   }
@@ -382,48 +387,48 @@ function handleGroupLeave(ws, msg) {
 // ---------------------------------------------------------------------------
 // Group text chat
 // ---------------------------------------------------------------------------
-function handleChatGroupCreate(ws, msg) {
+async function handleChatGroupCreate(ws, msg) {
   const name = String(msg.name || '').trim();
   if (!name || name.length > 64) throw new Error('Group name must be 1-64 characters.');
   const memberIds = Array.isArray(msg.memberIds) ? msg.memberIds : [];
   for (const id of memberIds) {
-    if (!db.getUserById(id)) throw new Error('One or more members do not exist.');
+    if (!(await db.getUserById(id))) throw new Error('One or more members do not exist.');
   }
-  const group = db.createGroup({ name, creatorId: ws.userId, memberIds });
+  const group = await db.createGroup({ name, creatorId: ws.userId, memberIds });
   for (const member of group.members) {
     send(member.id, { type: 'group:created', group });
   }
 }
 
-function handleGroupMsgSend(ws, msg) {
+async function handleGroupMsgSend(ws, msg) {
   const groupId = String(msg.groupId || '');
   const body = String(msg.body || '').trim();
   if (!groupId) throw new Error('groupId is required.');
   if (!body) throw new Error('Message body cannot be empty.');
   if (body.length > 4000) throw new Error('Message too long (max 4000 characters).');
-  if (!db.isGroupMember(groupId, ws.userId)) throw new Error('Not a member of this group.');
+  if (!(await db.isGroupMember(groupId, ws.userId))) throw new Error('Not a member of this group.');
 
-  const message = db.saveGroupMessage({ groupId, senderId: ws.userId, body });
-  const group = db.getGroup(groupId);
+  const message = await db.saveGroupMessage({ groupId, senderId: ws.userId, body });
+  const group = await db.getGroup(groupId);
   for (const member of group.members) {
     send(member.id, { type: 'groupmsg:new', message });
   }
 }
 
-function handleGroupRead(ws, msg) {
+async function handleGroupRead(ws, msg) {
   const groupId = String(msg.groupId || '');
   const lastMsgId = parseInt(msg.lastMsgId || '0', 10);
-  if (!groupId || !db.isGroupMember(groupId, ws.userId)) return;
-  db.markGroupRead(groupId, ws.userId, lastMsgId);
+  if (!groupId || !(await db.isGroupMember(groupId, ws.userId))) return;
+  await db.markGroupRead(groupId, ws.userId, lastMsgId);
 }
 
-function handleGroupAddMember(ws, msg) {
+async function handleGroupAddMember(ws, msg) {
   const groupId = String(msg.groupId || '');
   const userId = String(msg.userId || '');
-  if (!db.isGroupMember(groupId, ws.userId)) throw new Error('Not a member of this group.');
-  const added = db.addGroupMember(groupId, userId);
-  const group = db.getGroup(groupId);
-  const addedUser = db.getUserById(userId);
+  if (!(await db.isGroupMember(groupId, ws.userId))) throw new Error('Not a member of this group.');
+  const added = await db.addGroupMember(groupId, userId);
+  const group = await db.getGroup(groupId);
+  const addedUser = await db.getUserById(userId);
   // Broadcast the refreshed roster to every member, including the new one so
   // their client picks up the group live.
   for (const member of group.members) {
@@ -431,12 +436,12 @@ function handleGroupAddMember(ws, msg) {
   }
 }
 
-function handleChatGroupLeave(ws, msg) {
+async function handleChatGroupLeave(ws, msg) {
   const groupId = String(msg.groupId || '');
   const userId = ws.userId;
-  if (!db.isGroupMember(groupId, userId)) throw new Error('Not a member of this group.');
-  const leavingUser = db.getUserById(userId);
-  const group = db.removeGroupMember(groupId, userId);
+  if (!(await db.isGroupMember(groupId, userId))) throw new Error('Not a member of this group.');
+  const leavingUser = await db.getUserById(userId);
+  const group = await db.removeGroupMember(groupId, userId);
   // Tell the leaver their client should drop the group.
   sendTo(ws, { type: 'group:left', groupId });
   // If the group still exists, push the refreshed roster to those who remain.
@@ -447,17 +452,17 @@ function handleChatGroupLeave(ws, msg) {
   }
 }
 
-function handleGroupRemove(ws, msg) {
+async function handleGroupRemove(ws, msg) {
   const groupId = String(msg.groupId || '');
   const targetId = String(msg.userId || '');
-  const group = db.getGroup(groupId);
+  const group = await db.getGroup(groupId);
   if (!group) throw new Error('Group not found.');
   if (group.createdBy !== ws.userId) throw new Error('Only the group creator can remove members.');
   if (targetId === group.createdBy) throw new Error('The creator cannot be removed.');
-  if (!db.isGroupMember(groupId, targetId)) throw new Error('That user is not a member.');
+  if (!(await db.isGroupMember(groupId, targetId))) throw new Error('That user is not a member.');
 
-  const removedUser = db.getUserById(targetId);
-  const refreshed = db.removeGroupMember(groupId, targetId);
+  const removedUser = await db.getUserById(targetId);
+  const refreshed = await db.removeGroupMember(groupId, targetId);
   // Notify the removed user so their client drops the group.
   send(targetId, { type: 'group:removed', groupId, removedBy: ws.userId });
   if (refreshed) {

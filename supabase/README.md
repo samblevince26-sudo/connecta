@@ -7,16 +7,25 @@ This folder holds what you need to run Connecta's data layer on Supabase
 - `migrations/0001_init.sql` — the full Postgres schema (tables, indexes) that
   mirrors `server/src/db.js` 1:1, plus RLS policies so a direct browser/mobile
   client can only ever see its own data.
+- **The backend can now run on Postgres.** Set `DB_DRIVER=postgres` +
+  `SUPABASE_DB_URL` and the same server uses `server/src/db.pg.js` (an async
+  `pg` adapter) instead of SQLite. See §4.
 
-**What is NOT done yet (read this before you expect the app to use it)**
-- The Node backend still talks to **SQLite** through a synchronous
-  `better-sqlite3` adapter. Pointing it at Supabase means an **async rewrite**:
-  every `db.*` call becomes a promise (`pg` or `@supabase/supabase-js`), and
-  `routes.js` / `ws.js` must `await` them. That is a real migration, not a
-  config flip — it is scoped in section 4 below.
+**What is NOT done / not verified here**
+- The Postgres adapter is written, syntax-checked, and wired through the driver
+  selector, and its integration test (`server/test/db.pg.test.js`) covers the
+  full round-trip — but that test is **skipped by default** and was **not run
+  against a live database** in the environment where it was written (no Docker /
+  Postgres available). Run it yourself before trusting it in production:
+  ```bash
+  supabase start   # or any Postgres with migrations/0001_init.sql applied
+  cd server
+  TEST_PG_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+    node --test test/db.pg.test.js
+  ```
 - A **hosted** Supabase project (the cloud dashboard where you'd "manage the
-  app") requires **your own Supabase account** — I can't create a cloud project
-  for you. What I *can* do is everything below that lives in this repo.
+  app") requires **your own Supabase account** — it can't be created for you.
+  Everything that lives in this repo is provided.
 
 ---
 
@@ -78,42 +87,50 @@ supabase stop            # add --no-backup to discard local data
 Add these to `server/.env` (they are **not** read by the app yet — see §4):
 
 ```env
-# Postgres / Supabase (replaces DB_FILE once the pg adapter is enabled)
+# Postgres / Supabase. Set DB_DRIVER=postgres to use it instead of DB_FILE.
 SUPABASE_DB_URL=postgresql://postgres:POSTGRES_PASSWORD@db.<ref>.supabase.co:5432/postgres
-SUPABASE_SERVICE_ROLE_KEY=eyJ...        # server-side, bypasses RLS
-DB_DRIVER=sqlite                        # sqlite | postgres  (switch after §4)
+SUPABASE_SERVICE_ROLE_KEY=eyJ...        # only if a client talks to Supabase directly
+DB_DRIVER=postgres                      # sqlite | postgres
 ```
 
-Never commit real keys — `.env` is already gitignored.
+`SUPABASE_DB_URL` should include `?sslmode=require` for hosted Supabase; the
+adapter enables TLS automatically when it sees that. Never commit real keys —
+`.env` is already gitignored.
 
 ---
 
-## 4. Scope of wiring the backend to Postgres (the actual migration)
+## 4. How the Postgres backend is wired (implemented)
 
-When you're ready to switch the app over, this is the work, in order:
+The migration is done — the server runs on either driver with no code changes:
 
-1. **Add a driver switch** in `server/src/config.js` reading `DB_DRIVER`.
-2. **Write `server/src/db.pg.js`** implementing the exact same exported
-   functions as `db.js` (`createUser`, `verifyCredentials`, `saveMessage`,
-   `getThread`, `createGroup`, `saveGroupMessage`, …) but **async**, using a
-   `pg` Pool against `SUPABASE_DB_URL`. `module.exports = require(driver ===
-   'postgres' ? './db.pg' : './db')`.
-3. **Make call sites await** — `routes.js` handlers and every `ws.js` message
-   handler that touches `db`. Express handlers go `async`; WS handlers already
-   run in async callbacks, so it's mostly adding `await`.
-4. **Types**: `bigint` ids come back from `pg` as strings — cast to Number where
-   the client expects numeric message ids (or switch the column to `serial`).
-5. **Auth choice**: keep the existing bcrypt/JWT (server owns `users`), or move
-   to Supabase Auth (users.id = auth.users.id, GoTrue issues the JWT). Keeping
-   your auth is far less work and the RLS policies here are written to also work
-   if you later adopt Supabase Auth.
-6. **Tests**: `server/test/*` currently boot the SQLite server on a temp DB.
-   Add a Postgres variant (e.g. run against the local `supabase start` DB) or
-   keep SQLite for unit tests and add a thin integration test for `db.pg.js`.
+1. **Driver switch** — `server/src/config.js` reads `DB_DRIVER` (`sqlite` |
+   `postgres`) and `SUPABASE_DB_URL` (falls back to `DATABASE_URL`). It throws
+   early if `postgres` is selected without a URL.
+2. **Selector** — `server/src/db.js` lazily requires `./db.sqlite` or `./db.pg`
+   based on the driver, so the unused adapter (and `better-sqlite3`'s native
+   binding, or `pg`) is never loaded.
+3. **Async adapter** — `server/src/db.pg.js` implements the exact same exported
+   functions as the SQLite adapter, but async, using a `pg` Pool. Shape parity is
+   enforced: `bigint` ids and `COUNT(*)` are coerced to `Number`, boolean
+   `delivered`/`read` are returned as `0`/`1`, and unique-violations are
+   re-thrown with a `UNIQUE` message so `routes.js` still returns HTTP 409.
+4. **Awaited call sites** — every `db.*` call in `routes.js` and `ws.js` is now
+   `await`ed. Express handlers are `async`; the WS message dispatcher wraps
+   `handleMessage` in a promise chain so async rejections still produce the
+   `{type:'error'}` reply. Awaiting a synchronous SQLite return value is a
+   no-op, so one code path serves both drivers.
+5. **Auth unchanged** — the server still owns `users` with bcrypt + its own JWT.
+   The RLS policies in the migration are written to also work if you later adopt
+   Supabase Auth (`users.id = auth.users.id`).
+6. **Shutdown** — `index.js` `stop()` calls `db.close()`, which drains the pg
+   Pool (or closes the SQLite handle) so the process exits cleanly.
+7. **Tests** — `server/test/db.pg.test.js` round-trips users, contacts,
+   messages, groups, and calls against a live Postgres. It **skips** unless
+   `TEST_PG_URL` is set, keeping the default `npm test` on ephemeral SQLite.
 
-Estimated size: a focused rewrite of one module + mechanical `await` edits
-across `routes.js` and `ws.js`. The SQLite app keeps working untouched until you
-flip `DB_DRIVER`.
+To flip a deployment to Postgres: apply `migrations/0001_init.sql`, then set
+`DB_DRIVER=postgres` and `SUPABASE_DB_URL` in `server/.env` and restart. Run the
+integration test above first — it has not yet been executed against a real DB.
 
 ---
 

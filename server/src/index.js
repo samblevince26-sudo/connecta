@@ -5,6 +5,7 @@ const cors = require('cors');
 const config = require('./config');
 const routes = require('./routes');
 const { attachWebSocketServer } = require('./ws');
+const db = require('./db');
 
 const app = express();
 app.use(cors());
@@ -45,11 +46,20 @@ function start(port = config.port, host = config.host) {
   });
 }
 
-// Close both the WebSocket server (clears its heartbeat interval) and HTTP server.
+// Close the WebSocket server (clears its heartbeat), the HTTP server, and the
+// data layer (drains the Postgres pool / closes the SQLite handle) so the
+// process can exit cleanly.
 function stop() {
   return new Promise((resolve) => {
     let done = false;
-    const finish = () => { if (!done) { done = true; resolve(); } };
+    const finish = () => {
+      if (done) return;
+      done = true;
+      Promise.resolve()
+        .then(() => (typeof db.close === 'function' ? db.close() : undefined))
+        .catch(() => {})
+        .then(resolve);
+    };
     wss.close(() => server.close(finish));
     setTimeout(finish, 3000).unref();
   });

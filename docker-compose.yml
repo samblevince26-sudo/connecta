@@ -20,13 +20,40 @@ services:
       PORT: 4000
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      # Data layer: sqlite (default) or postgres. To use the bundled Postgres
+      # service below:  DB_DRIVER=postgres docker compose --profile postgres up -d
+      DB_DRIVER: ${DB_DRIVER:-sqlite}
       DB_FILE: /data/connecta.sqlite
+      SUPABASE_DB_URL: ${SUPABASE_DB_URL:-postgresql://connecta:${POSTGRES_PASSWORD:-connecta}@db:5432/connecta?sslmode=disable}
       TURN_HOST: ${TURN_HOST}
       TURN_SECRET: ${TURN_SECRET}
       TURN_TTL: ${TURN_TTL:-86400}
     volumes:
       - dbdata:/data
     restart: unless-stopped
+
+  # Optional Postgres for DB_DRIVER=postgres. Not started unless you pass
+  # --profile postgres. Applies supabase/migrations on first boot via the
+  # postgres image's initdb hook. For a *hosted* Supabase project instead, skip
+  # this service and point SUPABASE_DB_URL at your cloud connection string.
+  db:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_USER: connecta
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-connecta}
+      POSTGRES_DB: connecta
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./supabase/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U connecta"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   coturn:
     image: coturn/coturn:4.6.2
@@ -44,4 +71,5 @@ services:
 
 volumes:
   dbdata:
+  pgdata:
   turnlogs:
