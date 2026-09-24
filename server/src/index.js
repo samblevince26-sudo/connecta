@@ -31,17 +31,41 @@ app.use((err, req, res, next) => {
 });
 
 const server = http.createServer(app);
-attachWebSocketServer(server);
+const wss = attachWebSocketServer(server);
 
-server.listen(config.port, config.host, () => {
-  console.log(`Connecta server listening on http://${config.host}:${config.port}`);
-  console.log(`WebSocket signaling at ws://${config.host}:${config.port}/ws`);
-});
+// Listen and resolve the actual bound port (0 yields an ephemeral one, used by tests).
+function start(port = config.port, host = config.host) {
+  return new Promise((resolve) => {
+    server.listen(port, host, () => {
+      const { port: bound } = server.address();
+      console.log(`Connecta server listening on http://${host}:${bound}`);
+      console.log(`WebSocket signaling at ws://${host}:${bound}/ws`);
+      resolve(bound);
+    });
+  });
+}
+
+// Close both the WebSocket server (clears its heartbeat interval) and HTTP server.
+function stop() {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    wss.close(() => server.close(finish));
+    setTimeout(finish, 3000).unref();
+  });
+}
 
 function shutdown() {
   console.log('\nShutting down...');
-  server.close(() => process.exit(0));
+  stop().then(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();
 }
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+
+if (require.main === module) {
+  start();
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+module.exports = { app, server, wss, start, stop, shutdown };
+

@@ -73,6 +73,9 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .server-row .inline { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
 .server-row input { flex: 1; }
 .error-text { color: var(--danger); font-size: 13px; margin-top: 14px; min-height: 18px; text-align: center; }
+.auth-foot { text-align: center; margin: 6px 0 0; font-size: 13px; }
+.auth-foot a { color: var(--text-dim); text-decoration: none; }
+.auth-foot a:hover { color: var(--accent); text-decoration: underline; }
 
 /* -------------------------------- App ---------------------------------- */
 .app-screen { display: flex; }

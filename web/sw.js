@@ -1,9 +1,10 @@
 /* Connecta service worker: caches the app shell for offline launch.
  * Live data (REST /api, WebSocket /ws, WebRTC) is never cached. */
-const CACHE = 'connecta-shell-v1';
+const CACHE = 'connecta-shell-v2';
 const SHELL = [
   '/',
   '/index.html',
+  '/webrtc-selftest.html',
   '/manifest.webmanifest',
   '/assets/app.js',
   '/assets/styles.css',
@@ -34,16 +35,17 @@ self.addEventListener('fetch', (event) => {
   // Never intercept live API or signaling traffic.
   if (url.pathname.startsWith('/api') || url.pathname.startsWith('/ws')) return;
 
-  // Navigations: network-first so users get fresh shell, fall back to cache offline.
+  // Navigations: network-first so users get fresh content, fall back to cache offline.
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req)
         .then((res) => {
           const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put('/index.html', copy));
+          // Cache each navigation under its own URL (don't clobber the shell).
+          caches.open(CACHE).then((c) => c.put(req, copy));
           return res;
         })
-        .catch(() => caches.match('/index.html'))
+        .catch(() => caches.match(req).then((hit) => hit || caches.match('/index.html')))
     );
     return;
   }

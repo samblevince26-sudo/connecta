@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Connecta · WebRTC self-test</title>
+  <style>
+    :root {
+      --bg: #0f1115; --bg-2: #171a21; --bg-3: #1f2430; --border: #2a3140;
+      --text: #e6e9ef; --dim: #9aa4b2; --accent: #4f8cff; --ok: #37d67a; --bad: #ff5b5b; --warn: #ffc857;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 28px 20px 64px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    p.sub { color: var(--dim); margin: 0 0 20px; }
+    .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
+    button { background: var(--accent); color: #fff; border: 0; border-radius: 10px; padding: 10px 16px; font-size: 14px; cursor: pointer; }
+    button.ghost { background: var(--bg-3); border: 1px solid var(--border); color: var(--text); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    a.back { color: var(--dim); text-decoration: none; font-size: 14px; }
+    a.back:hover { color: var(--text); }
+    .card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; margin-bottom: 14px; }
+    .card h2 { font-size: 15px; margin: 0 0 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+    .row { display: flex; align-items: baseline; gap: 10px; padding: 7px 0; border-top: 1px solid var(--border); }
+    .row:first-of-type { border-top: 0; }
+    .tag { flex: 0 0 auto; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: .03em; }
+    .tag.pass { background: rgba(55,214,122,.15); color: var(--ok); }
+    .tag.fail { background: rgba(255,91,91,.15); color: var(--bad); }
+    .tag.info { background: rgba(79,140,255,.15); color: var(--accent); }
+    .tag.warn { background: rgba(255,200,87,.15); color: var(--warn); }
+    .tag.wait { background: var(--bg-3); color: var(--dim); }
+    .name { flex: 0 0 220px; }
+    .detail { color: var(--dim); font-size: 13px; word-break: break-word; }
+    video { width: 100%; max-width: 320px; border-radius: 10px; background: #000; margin-top: 10px; display: none; }
+    .summary { font-size: 14px; color: var(--dim); }
+    code { background: var(--bg-3); padding: 1px 5px; border-radius: 5px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>WebRTC self-test</h1>
+    <p class="sub">Diagnoses whether this browser can negotiate peer connections and flow audio/video. Runs entirely locally — no server or account needed.</p>
+
+    <div class="bar">
+      <button id="run">Run diagnostics</button>
+      <button id="device" class="ghost">Test real camera/mic</button>
+      <a class="back" href="/">← back to Connecta</a>
+      <span class="summary" id="summary"></span>
+    </div>
+
+    <div class="card">
+      <h2>Environment</h2>
+      <div id="env"></div>
+    </div>
+
+    <div class="card">
+      <h2>Peer connection + data channel (no media needed)</h2>
+      <div id="dc"></div>
+    </div>
+
+    <div class="card">
+      <h2>Media plane (synthetic audio + video through a real PeerConnection)</h2>
+      <div id="media"></div>
+    </div>
+
+    <div class="card">
+      <h2>Real device loopback (camera/mic)</h2>
+      <div id="device-results"></div>
+      <video id="preview" autoplay playsinline muted></video>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    function row(container, name, status, detail) {
+      const el = document.createElement('div');
+      el.className = 'row';
+      el.innerHTML = `<span class="tag ${status}">${status.toUpperCase()}</span><span class="name"></span><span class="detail"></span>`;
+      el.querySelector('.name').textContent = name;
+      el.querySelector('.detail').textContent = detail || '';
+      $(container).appendChild(el);
+      return el;
+    }
+    const clear = (id) => { $(id).innerHTML = ''; };
+
+    function checkEnv() {
+      clear('env');
+      const secure = window.isSecureContext;
+      row('env', 'Secure context (https/localhost)', secure ? 'pass' : 'fail', secure ? 'getUserMedia is permitted' : 'WebRTC needs https or localhost');
+      row('env', 'RTCPeerConnection', typeof RTCPeerConnection !== 'undefined' ? 'pass' : 'fail', typeof RTCPeerConnection !== 'undefined' ? 'available' : 'missing');
+      const gum = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+      row('env', 'getUserMedia', gum ? 'pass' : 'warn', gum ? 'API present' : 'API missing');
+      return { secure, gum };
+    }
+
+    async function testDataChannel() {
+      clear('dc');
+      if (typeof RTCPeerConnection === 'undefined') { row('dc', 'Data channel', 'fail', 'RTCPeerConnection unavailable'); return false; }
+      let pc1, pc2;
+      try {
+        pc1 = new RTCPeerConnection(); pc2 = new RTCPeerConnection();
+        pc1.onicecandidate = (e) => e.candidate && pc2.addIceCandidate(e.candidate);
+        pc2.onicecandidate = (e) => e.candidate && pc1.addIceCandidate(e.candidate);
+        const got = new Promise((res) => { pc2.ondatachannel = (ev) => { ev.channel.onmessage = (m) => res(m.data); }; });
+        const dc = pc1.createDataChannel('selftest');
+        const offer = await pc1.createOffer(); await pc1.setLocalDescription(offer);
+        await pc2.setRemoteDescription(pc1.localDescription);
+        const answer = await pc2.createAnswer(); await pc2.setLocalDescription(answer);
+        await pc1.setRemoteDescription(pc2.localDescription);
+        await new Promise((res) => { if (dc.readyState === 'open') return res(); dc.onopen = res; setTimeout(res, 4000); });
+        row('dc', 'Negotiation (offer/answer/ICE)', dc.readyState === 'open' ? 'pass' : 'fail', 'channel state: ' + dc.readyState);
+        if (dc.readyState !== 'open') return false;
+        dc.send('ping');
+        const echo = await Promise.race([got, sleep(2500).then(() => null)]);
+        row('dc', 'Data round-trip', echo === 'ping' ? 'pass' : 'fail', echo ? 'received "' + echo + '"' : 'no message received');
+        return echo === 'ping';
+      } catch (e) {
+        row('dc', 'Data channel', 'fail', e.name + ': ' + e.message);
+        return false;
+      } finally { try { pc1.close(); pc2.close(); } catch {} }
+    }
+
+    async function testMediaPlane() {
+      clear('media');
+      if (typeof RTCPeerConnection === 'undefined') { row('media', 'Media plane', 'fail', 'RTCPeerConnection unavailable'); return false; }
+      let pc1, pc2, timer, osc, ac;
+      try {
+        const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 240;
+        const ctx = canvas.getContext('2d'); let f = 0;
+        timer = setInterval(() => { ctx.fillStyle = f++ % 2 ? '#123456' : '#654321'; ctx.fillRect(0, 0, 320, 240); }, 50);
+        const vStream = canvas.captureStream(10);
+        const AC = window.AudioContext || window.webkitAudioContext;
+        ac = new AC(); osc = ac.createOscillator(); const dst = ac.createMediaStreamDestination();
+        osc.connect(dst); osc.start();
+        const fake = new MediaStream([...vStream.getVideoTracks(), ...dst.stream.getAudioTracks()]);
+        row('media', 'Synthetic tracks created', 'info', fake.getTracks().map((t) => t.kind).join(', '));
+
+        pc1 = new RTCPeerConnection(); pc2 = new RTCPeerConnection();
+        pc1.onicecandidate = (e) => e.candidate && pc2.addIceCandidate(e.candidate);
+        pc2.onicecandidate = (e) => e.candidate && pc1.addIceCandidate(e.candidate);
+        const received = [];
+        pc2.ontrack = (e) => received.push(e.track.kind);
+        for (const t of fake.getTracks()) pc1.addTrack(t, fake);
+        const offer = await pc1.createOffer(); await pc1.setLocalDescription(offer);
+        await pc2.setRemoteDescription(pc1.localDescription);
+        const answer = await pc2.createAnswer(); await pc2.setLocalDescription(answer);
+        await pc1.setRemoteDescription(pc2.localDescription);
+        await sleep(3000);
+
+        const stats = await pc2.getStats();
+        const inbound = {};
+        stats.forEach((r) => { if (r.type === 'inbound-rtp' && r.kind) inbound[r.kind] = r; });
+        const v = inbound.video || {}, a = inbound.audio || {};
+        row('media', 'Connection state', pc2.connectionState === 'connected' ? 'pass' : 'warn', 'pc1=' + pc1.connectionState + ' pc2=' + pc2.connectionState);
+        row('media', 'Tracks received', (received.includes('audio') && received.includes('video')) ? 'pass' : 'fail', received.join(', ') || 'none');
+        row('media', 'Audio bytes received', (a.bytesReceived || 0) > 0 ? 'pass' : 'fail', (a.bytesReceived || 0) + ' bytes / ' + (a.packetsReceived || 0) + ' packets');
+        row('media', 'Video bytes / frames decoded', (v.bytesReceived || 0) > 0 ? 'pass' : 'fail', (v.bytesReceived || 0) + ' bytes / ' + (v.framesDecoded || 0) + ' frames');
+        return (a.bytesReceived || 0) > 0 && (v.bytesReceived || 0) > 0;
+      } catch (e) {
+        row('media', 'Media plane', 'fail', e.name + ': ' + e.message);
+        return false;
+      } finally {
+        try { clearInterval(timer); if (osc) osc.stop(); if (ac) ac.close(); } catch {}
+        try { pc1.close(); pc2.close(); } catch {}
+      }
+    }
+
+    async function testRealDevice() {
+      clear('device-results');
+      const preview = $('preview');
+      if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+        row('device-results', 'getUserMedia', 'fail', 'Not available in this browser/context');
+        return;
+      }
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      } catch (e) {
+        const hint = e.name === 'NotFoundError' ? 'no camera/mic detected (headless or no devices)'
+          : e.name === 'NotAllowedError' ? 'permission denied — allow camera/mic access'
+          : e.name === 'NotReadableError' ? 'device is in use by another app' : e.message;
+        row('device-results', 'Capture camera + mic', 'fail', e.name + ' — ' + hint);
+        return;
+      }
+      const kinds = stream.getTracks().map((t) => t.kind + (t.label ? ' (' + t.label + ')' : '')).join(', ');
+      row('device-results', 'Capture camera + mic', 'pass', kinds);
+      preview.srcObject = stream; preview.style.display = 'block';
+
+      // Loop the real stream through a PeerConnection to confirm end-to-end media.
+      let pc1, pc2;
+      try {
+        pc1 = new RTCPeerConnection(); pc2 = new RTCPeerConnection();
+        pc1.onicecandidate = (e) => e.candidate && pc2.addIceCandidate(e.candidate);
+        pc2.onicecandidate = (e) => e.candidate && pc1.addIceCandidate(e.candidate);
+        const recv = []; pc2.ontrack = (e) => recv.push(e.track.kind);
+        for (const t of stream.getTracks()) pc1.addTrack(t, stream);
+        const offer = await pc1.createOffer(); await pc1.setLocalDescription(offer);
+        await pc2.setRemoteDescription(pc1.localDescription);
+        const answer = await pc2.createAnswer(); await pc2.setLocalDescription(answer);
+        await pc1.setRemoteDescription(pc2.localDescription);
+        await sleep(2500);
+        const stats = await pc2.getStats(); const inbound = {};
+        stats.forEach((r) => { if (r.type === 'inbound-rtp' && r.kind) inbound[r.kind] = r; });
+        const okA = (inbound.audio && inbound.audio.bytesReceived > 0);
+        const okV = (inbound.video && inbound.video.bytesReceived > 0);
+        row('device-results', 'Device media through PeerConnection', (okA || okV) ? 'pass' : 'fail',
+          'audio ' + ((inbound.audio && inbound.audio.bytesReceived) || 0) + 'B, video ' + ((inbound.video && inbound.video.bytesReceived) || 0) + 'B');
+      } catch (e) {
+        row('device-results', 'Device loopback', 'fail', e.name + ': ' + e.message);
+      } finally {
+        try { pc1.close(); pc2.close(); } catch {}
+        stream.getTracks().forEach((t) => t.stop());
+        setTimeout(() => { preview.style.display = 'none'; preview.srcObject = null; }, 1500);
+      }
+    }
+
+    async function runAll() {
+      $('run').disabled = true; $('summary').textContent = 'running…';
+      const counts = { pass: 0, fail: 0 };
+      const tally = (ok) => { ok ? counts.pass++ : counts.fail++; };
+      checkEnv();
+      tally(await testDataChannel());
+      tally(await testMediaPlane());
+      $('summary').textContent = `Core checks: ${counts.pass} passed, ${counts.fail} failed. Real camera/mic is a separate button.`;
+      $('run').disabled = false;
+    }
+
+    $('run').addEventListener('click', runAll);
+    $('device').addEventListener('click', testRealDevice);
+    runAll();
+  </script>
+</body>
+</html>

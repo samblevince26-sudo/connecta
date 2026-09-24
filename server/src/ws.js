@@ -91,6 +91,7 @@ function attachWebSocketServer(server) {
       ws.ping();
     }
   }, 30000);
+  interval.unref(); // never let the heartbeat alone hold the process open
   wss.on('close', () => clearInterval(interval));
 
   return wss;
