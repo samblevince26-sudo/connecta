@@ -14,12 +14,19 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const config = require('./config');
 
-// Supabase (and most managed Postgres) require TLS. Honor sslmode=require in
-// the connection string; PG_REJECT_UNAUTHORIZED=1 opts into full cert checks.
-const needsTls = /sslmode=require/i.test(config.databaseUrl);
+// Supabase (and most managed Postgres) require TLS. Since pg 8.x, an
+// `sslmode=require` in the connection string is parsed as `verify-full` AND
+// overrides any explicit `ssl` option, which breaks against managed certs with
+// a self-signed root in the chain. So: detect the requested sslmode, strip it
+// from the URL, and pass our own `ssl` object instead. PG_REJECT_UNAUTHORIZED=1
+// opts back into full certificate verification.
+const SSLMODE_RE = /([?&])sslmode=[^&]*/i;
+const wantsTls = SSLMODE_RE.test(config.databaseUrl);
+const rejectUnauthorized = process.env.PG_REJECT_UNAUTHORIZED === '1';
+const connectionString = config.databaseUrl.replace(SSLMODE_RE, '$1').replace(/[?&]$/, '');
 const pool = new Pool({
-  connectionString: config.databaseUrl,
-  ssl: needsTls ? { rejectUnauthorized: process.env.PG_REJECT_UNAUTHORIZED === '1' } : undefined,
+  connectionString,
+  ssl: wantsTls ? { rejectUnauthorized } : undefined,
   max: parseInt(process.env.PG_POOL_MAX || '10', 10),
 });
 
