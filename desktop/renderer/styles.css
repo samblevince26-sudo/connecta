@@ -110,6 +110,20 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .search-result .sr-info { display: flex; align-items: center; gap: 10px; }
 .search-result small { color: var(--text-dim); }
 
+.search-mode { flex: 0 0 auto; }
+.search-result.msg-result { cursor: pointer; align-items: flex-start; }
+.search-result.msg-result .sr-info { align-items: flex-start; width: 100%; }
+.sr-msg { min-width: 0; flex: 1; }
+.sr-who { font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; gap: 8px; }
+.sr-when { font-size: 10px; color: var(--text-dim); font-weight: 400; white-space: nowrap; }
+.sr-body { font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+.sr-body mark { background: var(--accent); color: #fff; border-radius: 3px; padding: 0 2px; }
+.msg.highlight { animation: msg-flash 1.6s ease-out; }
+@keyframes msg-flash {
+  0%, 40% { box-shadow: 0 0 0 3px var(--accent); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
+
 .contacts-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim);

@@ -365,6 +365,41 @@ const data = {
     return out;
   },
 
+  // Mirrors db.sqlite.searchMessages. ILIKE for case-insensitive matching
+  // (SQLite's LIKE is already case-insensitive for ASCII). NULL branches are
+  // explicitly cast so the UNION ALL resolves column types. bigint ids and
+  // created_at come back as strings and are coerced to Number.
+  async searchMessages(userId, queryStr, limit = 50) {
+    const q = `%${String(queryStr).replace(/[%_]/g, '')}%`;
+    const rows = await query(
+      `SELECT * FROM (
+         SELECT 'dm' AS kind, m.id AS id, m.body AS body, m.created_at AS created_at,
+                m.sender_id AS sender_id, m.recipient_id AS recipient_id,
+                NULL::uuid AS group_id, NULL::text AS group_name
+           FROM messages m
+          WHERE (m.sender_id = $1 OR m.recipient_id = $1) AND m.body ILIKE $2
+         UNION ALL
+         SELECT 'group' AS kind, gm.id AS id, gm.body AS body, gm.created_at AS created_at,
+                gm.sender_id AS sender_id, NULL::uuid AS recipient_id,
+                gm.group_id AS group_id, g.name AS group_name
+           FROM group_messages gm JOIN groups g ON g.id = gm.group_id
+          WHERE gm.group_id IN (SELECT group_id FROM group_members WHERE user_id = $3)
+            AND gm.body ILIKE $2
+       ) s ORDER BY created_at DESC LIMIT $4`,
+      [userId, q, userId, limit]
+    );
+    return rows.map((r) => ({
+      kind: r.kind,
+      id: Number(r.id),
+      body: r.body,
+      createdAt: Number(r.created_at),
+      senderId: r.sender_id,
+      peerId: r.kind === 'dm' ? (r.sender_id === userId ? r.recipient_id : r.sender_id) : null,
+      groupId: r.group_id,
+      groupName: r.group_name,
+    }));
+  },
+
   // Exposed so the server can drain the pool on shutdown.
   async close() {
     await pool.end();

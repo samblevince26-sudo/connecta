@@ -186,6 +186,26 @@ const stmts = {
         AND gm.id > COALESCE((SELECT last_read_msg_id FROM group_reads gr
                                WHERE gr.group_id = gm.group_id AND gr.user_id = ?), 0)`
   ),
+  // Full-text-ish search across the DMs a user participates in and the group
+  // messages of groups they belong to. UNION ALL keeps both id spaces; the
+  // `kind` column disambiguates them for the caller. LIKE is case-insensitive
+  // for ASCII in SQLite.
+  searchMessages: db.prepare(
+    `SELECT * FROM (
+       SELECT 'dm' AS kind, m.id AS id, m.body AS body, m.created_at AS created_at,
+              m.sender_id AS sender_id, m.recipient_id AS recipient_id,
+              NULL AS group_id, NULL AS group_name
+         FROM messages m
+        WHERE (m.sender_id = ? OR m.recipient_id = ?) AND m.body LIKE ?
+       UNION ALL
+       SELECT 'group' AS kind, gm.id AS id, gm.body AS body, gm.created_at AS created_at,
+              gm.sender_id AS sender_id, NULL AS recipient_id,
+              gm.group_id AS group_id, g.name AS group_name
+         FROM group_messages gm JOIN groups g ON g.id = gm.group_id
+        WHERE gm.group_id IN (SELECT group_id FROM group_members WHERE user_id = ?)
+          AND gm.body LIKE ?
+     ) ORDER BY created_at DESC LIMIT ?`
+  ),
 };
 
 const data = {
@@ -387,6 +407,20 @@ const data = {
       out[g.id] = data.groupUnreadCount(g.id, userId);
     }
     return out;
+  },
+
+  searchMessages(userId, query, limit = 50) {
+    const q = `%${String(query).replace(/[%_]/g, '')}%`;
+    return stmts.searchMessages.all(userId, userId, q, userId, q, limit).map((r) => ({
+      kind: r.kind,
+      id: r.id,
+      body: r.body,
+      createdAt: r.created_at,
+      senderId: r.sender_id,
+      peerId: r.kind === 'dm' ? (r.sender_id === userId ? r.recipient_id : r.sender_id) : null,
+      groupId: r.group_id,
+      groupName: r.group_name,
+    }));
   },
 
   close() {

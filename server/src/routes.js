@@ -54,6 +54,15 @@ router.get('/users/search', requireAuth, async (req, res) => {
   res.json({ users: (await db.searchUsers(q, req.userId)).map(withUser) });
 });
 
+// Search the caller's own DM + group message history. Results carry a `kind`
+// ('dm' | 'group') plus the ids the client needs to jump to the match.
+router.get('/search/messages', requireAuth, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json({ results: [] });
+  const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 200);
+  res.json({ results: await db.searchMessages(req.userId, q, limit) });
+});
+
 router.get('/contacts', requireAuth, async (req, res) => {
   res.json({ contacts: (await db.listContacts(req.userId)).map(withUser) });
 });

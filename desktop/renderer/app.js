@@ -19,6 +19,7 @@ const state = {
   unread: {},            // userId -> count
   activePeer: null,      // user object of open conversation
   lastPreview: {},       // userId -> last message preview
+  searchMode: 'people',  // 'people' | 'messages' — what the sidebar search targets
   reconnectTimer: null,
   typingTimer: null,
   peerTypingTimer: null,
@@ -60,6 +61,7 @@ const el = {
   meName: $('me-name'), meAvatar: $('me-avatar'),
   contactList: $('contact-list'), connectionDot: $('connection-dot'),
   searchInput: $('search-input'), searchBtn: $('search-btn'), searchResults: $('search-results'),
+  searchMode: $('search-mode'),
   emptyState: $('empty-state'), conversation: $('conversation'),
   peerName: $('peer-name'), peerStatus: $('peer-status'), peerAvatar: $('peer-avatar'),
   messages: $('messages'), messageInput: $('message-input'), sendBtn: $('send-btn'),
@@ -422,6 +424,11 @@ function renderContacts() {
 async function doSearch() {
   const q = el.searchInput.value.trim();
   if (q.length < 2) { el.searchResults.classList.add('hidden'); return; }
+  if (state.searchMode === 'messages') return searchMessages(q);
+  return searchPeople(q);
+}
+
+async function searchPeople(q) {
   try {
     const { users } = await api('/users/search?q=' + encodeURIComponent(q));
     el.searchResults.innerHTML = '';
@@ -449,6 +456,92 @@ async function doSearch() {
   } catch (err) { toast(err.message, true); }
 }
 
+// Snippet of the matched body with the query term wrapped in <mark>.
+function highlight(body, q) {
+  const safe = escapeHtml(body);
+  const idx = body.toLowerCase().indexOf(q.toLowerCase());
+  if (idx < 0) return safe.length > 90 ? safe.slice(0, 90) + '…' : safe;
+  const from = Math.max(0, idx - 30);
+  const slice = body.slice(from, idx + q.length + 40);
+  const lead = from > 0 ? '…' : '';
+  const before = escapeHtml(slice.slice(0, idx - from));
+  const match = escapeHtml(slice.slice(idx - from, idx - from + q.length));
+  const after = escapeHtml(slice.slice(idx - from + q.length));
+  return `${lead}${before}<mark>${match}</mark>${after}`;
+}
+
+async function searchMessages(q) {
+  try {
+    const { results } = await api('/search/messages?q=' + encodeURIComponent(q));
+    el.searchResults.innerHTML = '';
+    if (!results.length) {
+      el.searchResults.innerHTML = '<div class="search-result"><small>No messages found</small></div>';
+    }
+    for (const r of results) {
+      const row = document.createElement('div');
+      row.className = 'search-result msg-result';
+      const isGroup = r.kind === 'group';
+      const who = isGroup
+        ? escapeHtml(r.groupName || 'Group')
+        : escapeHtml(r.senderId === state.me.id ? (peerName(r.peerId) || 'You') : (peerName(r.senderId) || 'Unknown'));
+      row.innerHTML = `
+        <div class="sr-info">
+          <div class="avatar">${escapeHtml(initials(isGroup ? (r.groupName || 'G') : who))}</div>
+          <div class="sr-msg">
+            <div class="sr-who">${who}<span class="sr-when">${fmtTime(r.createdAt)}</span></div>
+            <div class="sr-body">${highlight(r.body, q)}</div>
+          </div>
+        </div>`;
+      row.addEventListener('click', () => jumpToResult(r));
+      el.searchResults.appendChild(row);
+    }
+    el.searchResults.classList.remove('hidden');
+  } catch (err) { toast(err.message, true); }
+}
+
+function peerName(id) {
+  const c = state.contacts.find((x) => x.id === id);
+  return c ? c.displayName : (id === state.me.id ? 'You' : '');
+}
+
+// Opens the conversation/group that contains the match, then scrolls to it.
+async function jumpToResult(r) {
+  el.searchResults.classList.add('hidden');
+  el.searchInput.value = '';
+  try {
+    if (r.kind === 'group') {
+      const g = state.groups.find((x) => x.id === r.groupId);
+      if (!g) { toast('That group is no longer available.', true); return; }
+      await openGroupConversation(g);
+    } else {
+      const peer = state.contacts.find((x) => x.id === r.peerId);
+      if (!peer) { toast('Open this conversation from your contact list first.', true); return; }
+      await openConversation(peer);
+    }
+    revealMessage(r.id);
+  } catch (err) { toast(err.message, true); }
+}
+
+// Scrolls a rendered message into view and briefly highlights it.
+function revealMessage(id) {
+  const node = el.messages.querySelector(`[data-id="${id}"]`);
+  if (!node) return;
+  node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  node.classList.add('highlight');
+  setTimeout(() => node.classList.remove('highlight'), 1600);
+}
+
+function setSearchMode(mode) {
+  state.searchMode = mode;
+  const messages = mode === 'messages';
+  el.searchMode.textContent = messages ? '💬' : '👤';
+  el.searchMode.title = messages ? 'Searching: messages' : 'Searching: people';
+  el.searchInput.placeholder = messages ? 'Search your messages…' : 'Find people to add…';
+  el.searchResults.classList.add('hidden');
+  if (el.searchInput.value.trim().length >= 2) doSearch();
+  else el.searchInput.focus();
+}
+
 async function addContact(user) {
   try {
     await api('/contacts', { method: 'POST', body: JSON.stringify({ userId: user.id }) });
@@ -460,6 +553,7 @@ async function addContact(user) {
 }
 
 el.searchBtn.addEventListener('click', doSearch);
+el.searchMode.addEventListener('click', () => setSearchMode(state.searchMode === 'messages' ? 'people' : 'messages'));
 el.searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
 
 // ---------------------------------------------------------------------------
@@ -1124,6 +1218,7 @@ function appendGroupMessage(m) {
   const mine = m.senderId === state.me.id;
   const div = document.createElement('div');
   div.className = 'msg ' + (mine ? 'me' : 'them');
+  div.dataset.id = m.id;
   const label = mine ? '' : `<span class="sender">${escapeHtml(senderName(m.senderId))}</span>`;
   div.innerHTML = `${label}${escapeHtml(m.body)}<span class="time">${fmtTime(m.createdAt)}</span>`;
   el.messages.appendChild(div);

@@ -82,6 +82,27 @@ test('postgres adapter: users, contacts, messages, groups round-trip',
       await db.markGroupRead(group.id, bob.id, gm.id);
       assert.equal(await db.groupUnreadCount(group.id, bob.id), 0, 'group read clears unread');
 
+      // --- search (DM + group, scoped, case-insensitive) --------------------
+      const dmTok = 'zebra' + rand();
+      await db.saveMessage({ senderId: alice.id, recipientId: bob.id, body: `find ${dmTok}` });
+      const gTok = 'falcon' + rand();
+      await db.saveGroupMessage({ groupId: group.id, senderId: alice.id, body: `meet ${gTok}` });
+
+      const dmHits = await db.searchMessages(alice.id, dmTok.toUpperCase());
+      assert.equal(dmHits.length, 1, 'dm search is case-insensitive (ILIKE)');
+      assert.equal(dmHits[0].kind, 'dm');
+      assert.equal(dmHits[0].peerId, bob.id);
+      assert.equal(typeof dmHits[0].id, 'number', 'search id coerced to Number');
+
+      const gHits = await db.searchMessages(bob.id, gTok);
+      assert.equal(gHits.length, 1, 'group member finds the group message');
+      assert.equal(gHits[0].kind, 'group');
+      assert.equal(gHits[0].groupId, group.id);
+      assert.equal(gHits[0].groupName, 'Team');
+
+      const dave = await db.createUser({ username: `dave_${rand()}`, password: 'password123', displayName: 'Dave' });
+      assert.equal((await db.searchMessages(dave.id, dmTok)).length, 0, 'no cross-user leakage');
+
       // add + remove members; empty group auto-deletes
       const carol = await db.createUser({ username: `carol_${rand()}`, password: 'password123', displayName: 'Carol' });
       assert.equal(await db.addGroupMember(group.id, carol.id), true);

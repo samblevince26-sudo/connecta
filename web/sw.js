@@ -1,6 +1,6 @@
 /* Connecta service worker: caches the app shell for offline launch.
  * Live data (REST /api, WebSocket /ws, WebRTC) is never cached. */
-const CACHE = 'connecta-shell-v2';
+const CACHE = 'connecta-shell-v3';
 const SHELL = [
   '/',
   '/index.html',
@@ -46,6 +46,24 @@ self.addEventListener('fetch', (event) => {
           return res;
         })
         .catch(() => caches.match(req).then((hit) => hit || caches.match('/index.html')))
+    );
+    return;
+  }
+
+  // App logic + styles: network-first so a deploy is picked up on the very next
+  // load. Cache-first would leave installed PWAs one reload behind (they'd run
+  // the previous app.js while the new copy refreshes in the background).
+  if (/^\/assets\/.*\.(?:js|css)$/.test(url.pathname)) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req))
     );
     return;
   }
