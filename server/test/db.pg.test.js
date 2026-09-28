@@ -103,6 +103,24 @@ test('postgres adapter: users, contacts, messages, groups round-trip',
       const dave = await db.createUser({ username: `dave_${rand()}`, password: 'password123', displayName: 'Dave' });
       assert.equal((await db.searchMessages(dave.id, dmTok)).length, 0, 'no cross-user leakage');
 
+      // --- attachments (media/file sharing) ---------------------------------
+      const upId = crypto.randomBytes(16).toString('hex');
+      const upload = await db.createUpload({ id: upId, ownerId: alice.id, name: 'photo.png', mime: 'image/png', size: 2048 });
+      assert.equal(upload.id, upId);
+      assert.equal(typeof upload.size, 'number', 'upload size coerced to Number (bigint)');
+      assert.equal((await db.getUpload(upId)).mime, 'image/png', 'upload metadata round-trips');
+
+      const att = { id: upId, name: 'photo.png', mime: 'image/png', size: 2048 };
+      const mAtt = await db.saveMessage({ senderId: alice.id, recipientId: bob.id, body: '', attachment: att });
+      assert.deepEqual(mAtt.attachment, att, 'attachment round-trips on a DM');
+      const threadAtt = await db.getThread(alice.id, bob.id);
+      assert.deepEqual(threadAtt.find((x) => x.id === mAtt.id).attachment, att, 'attachment persists across thread reload');
+
+      const gAtt = await db.saveGroupMessage({ groupId: group.id, senderId: alice.id, body: 'look', attachment: att });
+      assert.deepEqual(gAtt.attachment, att, 'attachment round-trips on a group message');
+      const gMsgs = await db.getGroupMessages(group.id);
+      assert.deepEqual(gMsgs.find((x) => x.id === gAtt.id).attachment, att, 'attachment persists in group history');
+
       // add + remove members; empty group auto-deletes
       const carol = await db.createUser({ username: `carol_${rand()}`, password: 'password123', displayName: 'Carol' });
       assert.equal(await db.addGroupMember(group.id, carol.id), true);

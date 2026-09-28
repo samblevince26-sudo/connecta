@@ -34,9 +34,19 @@ db.exec(`
     body         TEXT NOT NULL,
     created_at   INTEGER NOT NULL,
     delivered    INTEGER NOT NULL DEFAULT 0,
-    read         INTEGER NOT NULL DEFAULT 0
+    read         INTEGER NOT NULL DEFAULT 0,
+    attachment   TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages (sender_id, recipient_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS uploads (
+    id         TEXT PRIMARY KEY,
+    owner_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    mime       TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
 
   CREATE TABLE IF NOT EXISTS calls (
     id         TEXT PRIMARY KEY,
@@ -67,7 +77,8 @@ db.exec(`
     group_id   TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     sender_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     body       TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    attachment TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_group_messages ON group_messages (group_id, created_at, id);
 
@@ -78,6 +89,18 @@ db.exec(`
     PRIMARY KEY (group_id, user_id)
   );
 `);
+
+// Additive migration for databases created before the attachment column existed.
+// CREATE TABLE IF NOT EXISTS won't alter an existing table, so backfill here.
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+ensureColumn('messages', 'attachment', 'TEXT');
+ensureColumn('group_messages', 'attachment', 'TEXT');
+
+function encAttachment(a) { return a ? JSON.stringify(a) : null; }
+function decAttachment(s) { if (!s) return null; try { return JSON.parse(s); } catch { return null; } }
 
 function publicUser(row) {
   if (!row) return null;
@@ -106,10 +129,10 @@ const stmts = {
     'SELECT 1 FROM contacts WHERE owner_id = ? AND contact_id = ?'
   ),
   insertMessage: db.prepare(
-    'INSERT INTO messages (sender_id, recipient_id, body, created_at) VALUES (?, ?, ?, ?)'
+    'INSERT INTO messages (sender_id, recipient_id, body, created_at, attachment) VALUES (?, ?, ?, ?, ?)'
   ),
   thread: db.prepare(
-    `SELECT id, sender_id, recipient_id, body, created_at, delivered, read
+    `SELECT id, sender_id, recipient_id, body, created_at, delivered, read, attachment
        FROM messages
       WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
       ORDER BY created_at DESC, id DESC
@@ -167,10 +190,10 @@ const stmts = {
     'SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?'
   ),
   insertGroupMessage: db.prepare(
-    'INSERT INTO group_messages (group_id, sender_id, body, created_at) VALUES (?, ?, ?, ?)'
+    'INSERT INTO group_messages (group_id, sender_id, body, created_at, attachment) VALUES (?, ?, ?, ?, ?)'
   ),
   groupMessages: db.prepare(
-    `SELECT id, group_id, sender_id, body, created_at
+    `SELECT id, group_id, sender_id, body, created_at, attachment
        FROM group_messages
       WHERE group_id = ?
       ORDER BY created_at DESC, id DESC
@@ -206,6 +229,10 @@ const stmts = {
           AND gm.body LIKE ?
      ) ORDER BY created_at DESC LIMIT ?`
   ),
+  insertUpload: db.prepare(
+    'INSERT INTO uploads (id, owner_id, name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ),
+  uploadById: db.prepare('SELECT id, owner_id, name, mime, size, created_at FROM uploads WHERE id = ?'),
 };
 
 const data = {
@@ -256,9 +283,9 @@ const data = {
     return Boolean(stmts.isContact.get(ownerId, contactId));
   },
 
-  saveMessage({ senderId, recipientId, body }) {
+  saveMessage({ senderId, recipientId, body, attachment }) {
     const createdAt = Date.now();
-    const info = stmts.insertMessage.run(senderId, recipientId, body, createdAt);
+    const info = stmts.insertMessage.run(senderId, recipientId, body, createdAt, encAttachment(attachment));
     return {
       id: info.lastInsertRowid,
       senderId,
@@ -267,6 +294,7 @@ const data = {
       createdAt,
       delivered: 0,
       read: 0,
+      attachment: attachment || null,
     };
   },
 
@@ -282,6 +310,7 @@ const data = {
         createdAt: m.created_at,
         delivered: m.delivered,
         read: m.read,
+        attachment: decAttachment(m.attachment),
       }));
   },
 
@@ -374,10 +403,10 @@ const data = {
     return stmts.listGroupsForUser.all(userId).map((g) => data.getGroup(g.id));
   },
 
-  saveGroupMessage({ groupId, senderId, body }) {
+  saveGroupMessage({ groupId, senderId, body, attachment }) {
     const createdAt = Date.now();
-    const info = stmts.insertGroupMessage.run(groupId, senderId, body, createdAt);
-    return { id: info.lastInsertRowid, groupId, senderId, body, createdAt };
+    const info = stmts.insertGroupMessage.run(groupId, senderId, body, createdAt, encAttachment(attachment));
+    return { id: info.lastInsertRowid, groupId, senderId, body, createdAt, attachment: attachment || null };
   },
 
   getGroupMessages(groupId, limit = 200) {
@@ -390,6 +419,7 @@ const data = {
         senderId: m.sender_id,
         body: m.body,
         createdAt: m.created_at,
+        attachment: decAttachment(m.attachment),
       }));
   },
 
@@ -421,6 +451,18 @@ const data = {
       groupId: r.group_id,
       groupName: r.group_name,
     }));
+  },
+
+  createUpload({ id, ownerId, name, mime, size }) {
+    const createdAt = Date.now();
+    stmts.insertUpload.run(id, ownerId, name, mime, size, createdAt);
+    return { id, ownerId, name, mime, size, createdAt };
+  },
+
+  getUpload(id) {
+    const r = stmts.uploadById.get(id);
+    if (!r) return null;
+    return { id: r.id, ownerId: r.owner_id, name: r.name, mime: r.mime, size: r.size, createdAt: r.created_at };
   },
 
   close() {

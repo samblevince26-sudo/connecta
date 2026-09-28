@@ -35,6 +35,9 @@ async function query(text, params) {
   return res.rows;
 }
 
+function encAttachment(a) { return a ? JSON.stringify(a) : null; }
+function decAttachment(s) { if (!s) return null; try { return JSON.parse(s); } catch { return null; } }
+
 function publicUser(row) {
   if (!row) return null;
   return { id: row.id, username: row.username, displayName: row.display_name };
@@ -122,11 +125,11 @@ const data = {
     return rows.length > 0;
   },
 
-  async saveMessage({ senderId, recipientId, body }) {
+  async saveMessage({ senderId, recipientId, body, attachment }) {
     const createdAt = Date.now();
     const rows = await query(
-      'INSERT INTO messages (sender_id, recipient_id, body, created_at) VALUES ($1,$2,$3,$4) RETURNING id',
-      [senderId, recipientId, body, createdAt]
+      'INSERT INTO messages (sender_id, recipient_id, body, created_at, attachment) VALUES ($1,$2,$3,$4,$5) RETURNING id',
+      [senderId, recipientId, body, createdAt, encAttachment(attachment)]
     );
     return {
       id: Number(rows[0].id),
@@ -136,12 +139,13 @@ const data = {
       createdAt,
       delivered: 0,
       read: 0,
+      attachment: attachment || null,
     };
   },
 
   async getThread(userA, userB, limit = 200) {
     const rows = await query(
-      `SELECT id, sender_id, recipient_id, body, created_at, delivered, read
+      `SELECT id, sender_id, recipient_id, body, created_at, delivered, read, attachment
          FROM messages
         WHERE (sender_id = $1 AND recipient_id = $2) OR (sender_id = $3 AND recipient_id = $4)
         ORDER BY created_at DESC, id DESC
@@ -156,6 +160,7 @@ const data = {
       createdAt: Number(m.created_at),
       delivered: m.delivered ? 1 : 0,
       read: m.read ? 1 : 0,
+      attachment: decAttachment(m.attachment),
     }));
   },
 
@@ -307,18 +312,18 @@ const data = {
     return groups.filter(Boolean);
   },
 
-  async saveGroupMessage({ groupId, senderId, body }) {
+  async saveGroupMessage({ groupId, senderId, body, attachment }) {
     const createdAt = Date.now();
     const rows = await query(
-      'INSERT INTO group_messages (group_id, sender_id, body, created_at) VALUES ($1,$2,$3,$4) RETURNING id',
-      [groupId, senderId, body, createdAt]
+      'INSERT INTO group_messages (group_id, sender_id, body, created_at, attachment) VALUES ($1,$2,$3,$4,$5) RETURNING id',
+      [groupId, senderId, body, createdAt, encAttachment(attachment)]
     );
-    return { id: Number(rows[0].id), groupId, senderId, body, createdAt };
+    return { id: Number(rows[0].id), groupId, senderId, body, createdAt, attachment: attachment || null };
   },
 
   async getGroupMessages(groupId, limit = 200) {
     const rows = await query(
-      `SELECT id, group_id, sender_id, body, created_at
+      `SELECT id, group_id, sender_id, body, created_at, attachment
          FROM group_messages
         WHERE group_id = $1
         ORDER BY created_at DESC, id DESC
@@ -331,6 +336,7 @@ const data = {
       senderId: m.sender_id,
       body: m.body,
       createdAt: Number(m.created_at),
+      attachment: decAttachment(m.attachment),
     }));
   },
 
@@ -398,6 +404,25 @@ const data = {
       groupId: r.group_id,
       groupName: r.group_name,
     }));
+  },
+
+  async createUpload({ id, ownerId, name, mime, size }) {
+    const createdAt = Date.now();
+    await query(
+      'INSERT INTO uploads (id, owner_id, name, mime, size, created_at) VALUES ($1,$2,$3,$4,$5,$6)',
+      [id, ownerId, name, mime, size, createdAt]
+    );
+    return { id, ownerId, name, mime, size, createdAt };
+  },
+
+  async getUpload(id) {
+    const rows = await query(
+      'SELECT id, owner_id, name, mime, size, created_at FROM uploads WHERE id = $1',
+      [id]
+    );
+    if (!rows.length) return null;
+    const r = rows[0];
+    return { id: r.id, ownerId: r.owner_id, name: r.name, mime: r.mime, size: Number(r.size), createdAt: Number(r.created_at) };
   },
 
   // Exposed so the server can drain the pool on shutdown.

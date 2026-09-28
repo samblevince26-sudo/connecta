@@ -1,5 +1,7 @@
 const express = require('express');
 const db = require('./db');
+const config = require('./config');
+const storage = require('./storage');
 const { signToken, requireAuth } = require('./auth');
 const { isOnline } = require('./ws');
 
@@ -104,6 +106,46 @@ router.get('/groups/:id/messages', requireAuth, async (req, res) => {
   }
   const limit = Math.min(parseInt(req.query.limit || '200', 10) || 200, 500);
   res.json({ messages: await db.getGroupMessages(req.params.id, limit) });
+});
+
+// --- File uploads -----------------------------------------------------------
+// The client POSTs raw bytes (Content-Type = the file's mime, filename in the
+// `name` query param). express.raw is scoped to this route only, so the global
+// JSON parser is untouched. Returns metadata; the client then references
+// `upload` on a message:send / groupmsg:send.
+router.post('/uploads', requireAuth, express.raw({ type: '*/*', limit: config.maxUploadBytes }), async (req, res) => {
+  const mime = String(req.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (!config.allowedUploadMimes.includes(mime)) {
+    return res.status(415).json({ error: 'That file type is not allowed.' });
+  }
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+    return res.status(400).json({ error: 'Empty upload.' });
+  }
+  const name = (String(req.query.name || 'file').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 180)) || 'file';
+  const id = storage.newId();
+  try {
+    await storage.write(id, req.body);
+    const upload = await db.createUpload({ id, ownerId: req.userId, name, mime, size: req.body.length });
+    res.status(201).json({ upload });
+  } catch (err) {
+    await storage.remove(id);
+    res.status(500).json({ error: 'Could not store the file.' });
+  }
+});
+
+// Serves a stored file. Any authenticated user with the unguessable id can fetch
+// it (capability-URL model); media elements load it via an authenticated fetch on
+// the client, so the token never appears in a URL.
+router.get('/uploads/:id', requireAuth, async (req, res) => {
+  if (!storage.isValidId(req.params.id)) return res.status(400).json({ error: 'Invalid id.' });
+  const up = await db.getUpload(req.params.id);
+  if (!up) return res.status(404).json({ error: 'Not found.' });
+  const inline = /^(image|video|audio)\//.test(up.mime) || up.mime === 'application/pdf' || up.mime === 'text/plain';
+  res.setHeader('Content-Type', up.mime);
+  res.setHeader('Content-Length', up.size);
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${up.name.replace(/"/g, '')}"`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  storage.readStream(up.id).pipe(res);
 });
 
 module.exports = router;

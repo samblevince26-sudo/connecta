@@ -9,8 +9,12 @@ const crypto = require('node:crypto');
 const WebSocket = require('ws');
 
 // config.js and db.js read the environment at require time, so this must run
-// before ../src/index is loaded.
+// before ../src/index is loaded. Force the SQLite driver explicitly: a developer
+// .env may set DB_DRIVER=postgres, and dotenv would otherwise route these unit
+// tests at the live database. The Postgres adapter has its own integration test
+// (db.pg.test.js) gated on TEST_PG_URL.
 const tmpDb = path.join(os.tmpdir(), `connecta-test-${crypto.randomBytes(6).toString('hex')}.sqlite`);
+process.env.DB_DRIVER = 'sqlite';
 process.env.DB_FILE = tmpDb;
 process.env.JWT_SECRET = 'test-secret-0123456789abcdef';
 process.env.NODE_ENV = 'test';

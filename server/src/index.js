@@ -27,8 +27,11 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 // Central error handler.
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: 'Internal server error.' });
+  // body-parser sets a numeric status (e.g. 413 payload too large on uploads).
+  const status = Number.isInteger(err.status) ? err.status : 500;
+  if (status >= 500) console.error(err);
+  const message = status === 413 ? 'File is too large.' : (err.message || 'Internal server error.');
+  res.status(status).json({ error: status >= 500 ? 'Internal server error.' : message });
 });
 
 const server = http.createServer(app);

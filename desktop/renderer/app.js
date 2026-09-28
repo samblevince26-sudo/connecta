@@ -23,6 +23,8 @@ const state = {
   reconnectTimer: null,
   typingTimer: null,
   peerTypingTimer: null,
+  objectUrls: [],        // blob: URLs created for attachment media; revoked on conversation switch
+  pendingAttachments: [],// uploads staged in the composer before sending
 };
 
 // Live call state.
@@ -65,6 +67,7 @@ const el = {
   emptyState: $('empty-state'), conversation: $('conversation'),
   peerName: $('peer-name'), peerStatus: $('peer-status'), peerAvatar: $('peer-avatar'),
   messages: $('messages'), messageInput: $('message-input'), sendBtn: $('send-btn'),
+  attachBtn: $('attach-btn'), fileInput: $('file-input'),
   typingIndicator: $('typing-indicator'),
   voiceBtn: $('voice-btn'), videoBtn: $('video-btn'),
   callOverlay: $('call-overlay'), remoteVideo: $('remote-video'), localVideo: $('local-video'),
@@ -575,6 +578,7 @@ async function openConversation(user) {
   renderContacts();
   renderGroups();
 
+  revokeObjectUrls();
   el.messages.innerHTML = '';
   try {
     const { messages } = await api(`/messages/${user.id}`);
@@ -609,16 +613,158 @@ function updatePeerStatus() {
   el.videoBtn.disabled = !online;
 }
 
+// ---------------------------------------------------------------------------
+// Attachments (media / file sharing)
+// ---------------------------------------------------------------------------
+function authHeaders(extra = {}) {
+  const h = { ...extra };
+  if (state.token) h.Authorization = `Bearer ${state.token}`;
+  return h;
+}
+
+function revokeObjectUrls() {
+  for (const u of state.objectUrls) { try { URL.revokeObjectURL(u); } catch (_) { /* noop */ } }
+  state.objectUrls = [];
+}
+
+// Fetches an upload's bytes with the auth token (tokens never appear in URLs)
+// and returns a tracked blob: URL for use as a media src.
+async function fetchObjectUrl(id) {
+  const res = await fetch(apiBase() + '/uploads/' + encodeURIComponent(id), { headers: authHeaders() });
+  if (!res.ok) throw new Error('Could not load attachment.');
+  const url = URL.createObjectURL(await res.blob());
+  state.objectUrls.push(url);
+  return url;
+}
+
+function hydrateMedia(node, id) {
+  fetchObjectUrl(id)
+    .then((url) => { node.src = url; })
+    .catch(() => {
+      const err = document.createElement('div');
+      err.className = 'attachment-error';
+      err.textContent = 'Could not load attachment.';
+      node.replaceWith(err);
+    });
+}
+
+function humanSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// Builds the DOM node for a message attachment. Images/video/audio render
+// inline and hydrate lazily; everything else becomes a download button.
+function attachmentNode(att) {
+  const kind = (att.mime || '').split('/')[0];
+  const wrap = document.createElement('div');
+  wrap.className = 'attachment ' + kind;
+
+  if (kind === 'image' || kind === 'video' || kind === 'audio') {
+    const tag = kind === 'image' ? 'img' : kind;
+    const media = document.createElement(tag);
+    media.className = 'attachment-media';
+    if (kind === 'image') media.alt = att.name || 'image';
+    else { media.controls = true; media.preload = 'metadata'; }
+    wrap.appendChild(media);
+    hydrateMedia(media, att.id);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'attachment-meta';
+  const name = document.createElement('span');
+  name.className = 'attachment-name';
+  name.textContent = att.name || 'file';
+  const size = document.createElement('span');
+  size.className = 'attachment-size';
+  size.textContent = humanSize(att.size);
+  meta.appendChild(name);
+  meta.appendChild(size);
+
+  if (kind !== 'image') {
+    const dl = document.createElement('button');
+    dl.className = 'attachment-dl';
+    dl.type = 'button';
+    dl.textContent = 'Download';
+    dl.addEventListener('click', () => downloadAttachment(att));
+    meta.appendChild(dl);
+  }
+  wrap.appendChild(meta);
+  return wrap;
+}
+
+async function downloadAttachment(att) {
+  try {
+    const url = await fetchObjectUrl(att.id);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = att.name || 'file';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (_) {
+    toast('Download failed.', true);
+  }
+}
+
+// Uploads a File (raw body, mime preserved) and returns the canonical upload
+// record {id,name,mime,size}.
+async function uploadFile(file) {
+  const res = await fetch(apiBase() + '/uploads?name=' + encodeURIComponent(file.name), {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': file.type || 'application/octet-stream' }),
+    body: file,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+  return data.upload;
+}
+
+function previewText(m) {
+  if (m.body) return m.body;
+  if (m.attachment) return '📎 ' + (m.attachment.name || 'file');
+  return '';
+}
+
+// Uploads each selected file and sends it as a message. Any text in the
+// composer becomes the caption of the first attachment.
+async function sendFiles(files) {
+  if (!files || !files.length) return;
+  if (!state.activePeer && !state.activeGroup) { toast('Open a conversation first.', true); return; }
+  const caption = el.messageInput.value.trim();
+  for (let i = 0; i < files.length; i += 1) {
+    const file = files[i];
+    try {
+      toast(`Uploading ${file.name}…`);
+      const upload = await uploadFile(file);
+      const body = i === 0 ? caption : '';
+      if (state.activeGroup) {
+        wsSend({ type: 'groupmsg:send', groupId: state.activeGroup.id, body, attachment: { id: upload.id } });
+      } else {
+        wsSend({ type: 'message:send', recipientId: state.activePeer.id, body, attachment: { id: upload.id } });
+      }
+    } catch (err) {
+      toast(err.message || 'Upload failed.', true);
+    }
+  }
+  el.messageInput.value = '';
+  el.messageInput.style.height = 'auto';
+}
+
 function appendMessage(m) {
   const div = document.createElement('div');
   const mine = m.senderId === state.me.id;
   div.className = 'msg ' + (mine ? 'me' : 'them');
   div.dataset.id = m.id;
-  div.innerHTML = `${escapeHtml(m.body)}<span class="time">${fmtTime(m.createdAt)}</span>`;
+  const bodyHtml = m.body ? escapeHtml(m.body) : '';
+  div.innerHTML = `${bodyHtml}<span class="time">${fmtTime(m.createdAt)}</span>`;
+  if (m.attachment) div.insertBefore(attachmentNode(m.attachment), div.firstChild);
   el.messages.appendChild(div);
   scrollToBottom();
   const peerId = mine ? m.recipientId : m.senderId;
-  state.lastPreview[peerId] = (mine ? 'You: ' : '') + m.body;
+  state.lastPreview[peerId] = (mine ? 'You: ' : '') + previewText(m);
   renderContacts();
 }
 
@@ -675,6 +821,13 @@ el.messageInput.addEventListener('input', () => {
   state.typingTimer = setTimeout(
     () => wsSend({ type: 'typing', peerId: state.activePeer.id, isTyping: false }), 1200
   );
+});
+
+el.attachBtn.addEventListener('click', () => el.fileInput.click());
+el.fileInput.addEventListener('change', () => {
+  const files = Array.from(el.fileInput.files || []);
+  el.fileInput.value = '';
+  if (files.length) sendFiles(files);
 });
 
 function showPeerTyping(userId, isTyping) {
@@ -1200,6 +1353,7 @@ async function openGroupConversation(group) {
   renderContacts();
   renderGroups();
 
+  revokeObjectUrls();
   el.messages.innerHTML = '';
   try {
     const { messages } = await api(`/groups/${group.id}/messages`);
@@ -1220,10 +1374,12 @@ function appendGroupMessage(m) {
   div.className = 'msg ' + (mine ? 'me' : 'them');
   div.dataset.id = m.id;
   const label = mine ? '' : `<span class="sender">${escapeHtml(senderName(m.senderId))}</span>`;
-  div.innerHTML = `${label}${escapeHtml(m.body)}<span class="time">${fmtTime(m.createdAt)}</span>`;
+  const bodyHtml = m.body ? escapeHtml(m.body) : '';
+  div.innerHTML = `${label}${bodyHtml}<span class="time">${fmtTime(m.createdAt)}</span>`;
+  if (m.attachment) div.insertBefore(attachmentNode(m.attachment), div.querySelector('.time'));
   el.messages.appendChild(div);
   scrollToBottom();
-  state.groupPreview[m.groupId] = (mine ? 'You: ' : senderName(m.senderId) + ': ') + m.body;
+  state.groupPreview[m.groupId] = (mine ? 'You: ' : senderName(m.senderId) + ': ') + previewText(m);
   renderGroups();
 }
 

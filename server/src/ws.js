@@ -174,16 +174,31 @@ async function handleAuth(ws, msg) {
   if (firstSocket) broadcastPresence(user.id, true);
 }
 
+// Validates a client-supplied attachment reference and returns the canonical
+// metadata from the DB (never trusting client-sent name/mime/size). Returns null
+// when no attachment was supplied. Throws if the upload is missing or belongs to
+// someone else, so a user can't attach another user's file.
+async function validateAttachment(senderId, att) {
+  if (!att || typeof att !== 'object') return null;
+  const id = String(att.id || '');
+  if (!id) return null;
+  const up = await db.getUpload(id);
+  if (!up) throw new Error('Attachment not found.');
+  if (up.ownerId !== senderId) throw new Error('Cannot attach a file you did not upload.');
+  return { id: up.id, name: up.name, mime: up.mime, size: up.size };
+}
+
 async function handleSendMessage(ws, msg) {
   const senderId = ws.userId;
   const recipientId = String(msg.recipientId || '');
   const body = String(msg.body || '').trim();
   if (!recipientId) throw new Error('recipientId is required.');
-  if (!body) throw new Error('Message body cannot be empty.');
+  const attachment = await validateAttachment(senderId, msg.attachment);
+  if (!body && !attachment) throw new Error('Message body cannot be empty.');
   if (body.length > 4000) throw new Error('Message too long (max 4000 characters).');
   if (!(await db.getUserById(recipientId))) throw new Error('Recipient not found.');
 
-  const stored = await db.saveMessage({ senderId, recipientId, body });
+  const stored = await db.saveMessage({ senderId, recipientId, body, attachment });
   const delivered = send(recipientId, { type: 'message:new', message: stored });
   if (delivered) {
     await db.markDelivered(recipientId, senderId);
@@ -404,11 +419,12 @@ async function handleGroupMsgSend(ws, msg) {
   const groupId = String(msg.groupId || '');
   const body = String(msg.body || '').trim();
   if (!groupId) throw new Error('groupId is required.');
-  if (!body) throw new Error('Message body cannot be empty.');
+  const attachment = await validateAttachment(ws.userId, msg.attachment);
+  if (!body && !attachment) throw new Error('Message body cannot be empty.');
   if (body.length > 4000) throw new Error('Message too long (max 4000 characters).');
   if (!(await db.isGroupMember(groupId, ws.userId))) throw new Error('Not a member of this group.');
 
-  const message = await db.saveGroupMessage({ groupId, senderId: ws.userId, body });
+  const message = await db.saveGroupMessage({ groupId, senderId: ws.userId, body, attachment });
   const group = await db.getGroup(groupId);
   for (const member of group.members) {
     send(member.id, { type: 'groupmsg:new', message });

@@ -56,6 +56,25 @@ const config = {
   rtc: { baseIceServers, turn },
 };
 
+// --- File uploads -----------------------------------------------------------
+// Local-disk storage by default (zero config, works on both DB drivers). To move
+// to object storage later, swap server/src/storage.js — nothing else changes.
+config.uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'data', 'uploads');
+config.maxUploadBytes = Math.max(1, parseInt(process.env.MAX_UPLOAD_MB || '25', 10)) * 1024 * 1024;
+config.allowedUploadMimes = (process.env.ALLOWED_UPLOAD_MIMES
+  ? process.env.ALLOWED_UPLOAD_MIMES.split(',')
+  : [
+      'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+      'video/mp4', 'video/webm', 'video/quicktime',
+      'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/mp4',
+      'application/pdf', 'text/plain',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ]
+).map((s) => s.trim().toLowerCase()).filter(Boolean);
+
 if ((config.dbDriver === 'postgres' || config.dbDriver === 'pg') && !config.databaseUrl) {
   throw new Error('DB_DRIVER=postgres requires SUPABASE_DB_URL (or DATABASE_URL) to be set.');
 }

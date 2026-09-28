@@ -1,6 +1,6 @@
 /* Connecta service worker: caches the app shell for offline launch.
  * Live data (REST /api, WebSocket /ws, WebRTC) is never cached. */
-const CACHE = 'connecta-shell-v3';
+const CACHE = 'connecta-shell-v4';
 const SHELL = [
   '/',
   '/index.html',

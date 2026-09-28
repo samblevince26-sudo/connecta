@@ -170,8 +170,22 @@ input:focus, textarea:focus { border-color: var(--accent); }
 
 .typing-indicator { height: 18px; padding: 0 20px; font-size: 12px; color: var(--text-dim); }
 
-.composer { display: flex; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--bg-2); }
+.composer { display: flex; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--bg-2); align-items: flex-end; }
 .composer textarea { flex: 1; resize: none; max-height: 120px; }
+.composer .action-btn { flex-shrink: 0; }
+
+/* Attachments (media / file sharing) */
+.attachment { display: block; margin-bottom: 4px; max-width: 320px; }
+.attachment-media { display: block; max-width: 100%; border-radius: 10px; background: rgba(0,0,0,.25); }
+.attachment.image .attachment-media { cursor: zoom-in; }
+.attachment audio { width: 260px; }
+.attachment-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-top: 4px; opacity: .85; }
+.attachment-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+.attachment-size { opacity: .7; flex-shrink: 0; }
+.attachment-dl { margin-left: auto; background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.25); color: inherit; border-radius: 8px; padding: 2px 10px; font-size: 11px; cursor: pointer; }
+.attachment-dl:hover { background: rgba(255,255,255,.3); }
+.msg.them .attachment-dl { background: var(--bg-1); border-color: var(--border); }
+.attachment-error { font-size: 12px; opacity: .8; font-style: italic; padding: 6px 0; }
 
 /* Call overlay */
 .call-overlay { position: fixed; inset: 0; background: rgba(6,8,12,.96); z-index: 50; display: flex; align-items: center; justify-content: center; }
