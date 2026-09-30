@@ -40,7 +40,9 @@ const call = {
   incoming: null,        // pending incoming call info
 };
 
-// Group call state (full mesh: one PeerConnection per remote participant).
+// Group call state. Media runs either as a full mesh (one PeerConnection per
+// remote participant) or, when the server hands us an SFU config, through the
+// self-hosted LiveKit server (single uplink, server fans out).
 const group = {
   active: false,
   callId: null,
@@ -49,6 +51,8 @@ const group = {
   peers: new Map(),      // userId -> { pc, stream, videoEl, tileEl, displayName, offeredByUs }
   incoming: null,        // pending incoming group invite
   pendingInvite: [],     // userIds to invite right after creating
+  sfu: null,             // {url, room, token} from the server when LiveKit is enabled
+  room: null,            // LiveKit Room instance while in SFU mode
 };
 
 function inAnyCall() { return Boolean(call.callId || group.active || call.incoming || group.incoming); }
@@ -1124,11 +1128,13 @@ async function onGroupCreated(msg) {
     return;
   }
   group.active = true;
+  group.sfu = msg.sfu || null;
   openCallOverlay();
   el.localVideo.srcObject = group.localStream;
   el.localVideo.classList.toggle('hidden', group.kind === 'audio');
   setCallStatus('Waiting for others to join…');
   startCall();
+  if (group.sfu) await connectSfu();
   wsSend({ type: 'groupcall:invite', callId: group.callId, userIds: group.pendingInvite });
 }
 
@@ -1164,6 +1170,7 @@ async function answerGroup() {
   group.kind = inc.kind;
   group.active = true;
   group.incoming = null;
+  group.sfu = inc.sfu || null;
   if (inc.iceServers) state.iceServers = inc.iceServers;
   openCallOverlay();
   el.localVideo.srcObject = group.localStream;
@@ -1178,11 +1185,17 @@ async function onGroupJoined(msg) {
   group.callId = msg.callId;
   group.kind = msg.kind;
   group.active = true;
+  group.sfu = msg.sfu || group.sfu || null;
   if (msg.iceServers) state.iceServers = msg.iceServers;
   openCallOverlay();
   el.localVideo.srcObject = group.localStream;
   el.localVideo.classList.toggle('hidden', group.kind === 'audio');
   startCall();
+  if (group.sfu) {
+    await connectSfu();
+    setCallStatus(`Group call · ${group.room.numParticipants + 1} people`);
+    return;
+  }
   for (const peer of msg.peers || []) {
     addGridTile(peer.id, peer.displayName);
     await offerTo(peer);
@@ -1192,6 +1205,11 @@ async function onGroupJoined(msg) {
 
 function onGroupPeerJoined(msg) {
   if (!group.active || msg.callId !== group.callId) return;
+  if (sfuActive()) {
+    // LiveKit's ParticipantConnected/TrackSubscribed own the tiles in SFU mode.
+    setCallStatus(`Group call · ${group.room.numParticipants + 1} people`);
+    return;
+  }
   addGridTile(msg.peer.id, msg.peer.displayName);
   ensureGroupPc(msg.peer.id, msg.peer.displayName); // wait for their offer
   setCallStatus(`Group call · ${group.peers.size + 1} people`);
@@ -1247,6 +1265,7 @@ async function offerTo(peer) {
 
 async function onGroupSignal(msg) {
   if (!group.active || msg.callId !== group.callId) return;
+  if (sfuActive()) return; // SFU mode: LiveKit owns all media signaling.
   const fromId = msg.from;
   const entry = ensureGroupPc(fromId, senderName(fromId));
   const { sdp, candidate } = msg.signal || {};
@@ -1283,6 +1302,7 @@ function removeGroupPeer(peerId) {
 
 function leaveGroupCall() {
   if (group.callId) wsSend({ type: 'groupcall:leave', callId: group.callId });
+  disconnectSfu();
   for (const peerId of [...group.peers.keys()]) removeGroupPeer(peerId);
   if (group.localStream) group.localStream.getTracks().forEach((t) => t.stop());
   el.localVideo.srcObject = null;
@@ -1302,6 +1322,76 @@ function resetGroup() {
   group.peers.clear();
   group.incoming = null;
   group.pendingInvite = [];
+  group.sfu = null;
+  group.room = null;
+}
+
+// ---------------------------------------------------------------------------
+// Group calls over the LiveKit SFU
+// ---------------------------------------------------------------------------
+// When the server supplies an SFU config we connect ONE LiveKit Room instead of
+// building a WebRTC mesh. The SFU fans media out, so call cost stays flat as the
+// room grows past the ~6-person mesh limit. Participant identity is the Connecta
+// user id, which lets us reuse the existing grid tiles.
+function sfuActive() { return Boolean(group.sfu && group.room); }
+
+async function connectSfu() {
+  const { Room, RoomEvent } = window.LivekitClient;
+  const room = new Room({ adaptiveStream: true, dynacast: true });
+  group.room = room;
+
+  room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+    const peerId = participant.identity;
+    addGridTile(peerId, participant.name || senderName(peerId));
+    const tile = groupTileFor(peerId);
+    const videoEl = tile && tile.querySelector('video');
+    if (videoEl && track.kind === 'video') videoEl.srcObject = new MediaStream([track]);
+    if (track.kind === 'audio') track.attach();
+  });
+
+  room.on(RoomEvent.TrackUnsubscribed, (track) => { track.detach(); });
+
+  room.on(RoomEvent.ParticipantConnected, (p) => {
+    addGridTile(p.identity, p.name || senderName(p.identity));
+    setCallStatus(`Group call · ${room.numParticipants + 1} people`);
+  });
+
+  room.on(RoomEvent.ParticipantDisconnected, (p) => {
+    removeGroupPeer(p.identity);
+    setCallStatus(`Group call · ${room.numParticipants + 1} people`);
+  });
+
+  room.on(RoomEvent.Disconnected, () => {
+    if (group.active) leaveGroupCall();
+  });
+
+  await room.connect(group.sfu.url, group.sfu.token);
+
+  // Publish the tracks we already captured via getUserMedia.
+  if (group.localStream) {
+    for (const track of group.localStream.getTracks()) {
+      await room.localParticipant.publishTrack(track);
+    }
+  }
+  // Render anyone already in the room.
+  room.remoteParticipants.forEach((p) => {
+    addGridTile(p.identity, p.name || senderName(p.identity));
+    p.trackPublications.forEach((pub) => {
+      if (pub.isSubscribed && pub.track && pub.track.kind === 'video') {
+        const tile = groupTileFor(p.identity);
+        const videoEl = tile && tile.querySelector('video');
+        if (videoEl) videoEl.srcObject = new MediaStream([pub.track]);
+      }
+    });
+  });
+  setCallStatus(`Group call · ${room.numParticipants + 1} people`);
+}
+
+function disconnectSfu() {
+  if (group.room) {
+    try { group.room.disconnect(); } catch { /* already closed */ }
+  }
+  group.room = null;
 }
 
 el.groupCallBtn.addEventListener('click', openGroupPicker);

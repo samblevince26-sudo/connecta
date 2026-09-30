@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const { verifyToken } = require('./auth');
 const db = require('./db');
 const config = require('./config');
+const livekit = require('./livekit');
 
 // userId -> Set<ws>
 const connections = new Map();
@@ -309,11 +310,18 @@ async function groupParticipantList(call, excludeId) {
   return out;
 }
 
-function handleGroupCreate(ws, msg) {
+async function handleGroupCreate(ws, msg) {
   const kind = msg.kind === 'audio' ? 'audio' : 'video';
   const callId = uuidv4();
   groupCalls.set(callId, { kind, participants: new Set([ws.userId]), createdAt: Date.now() });
-  sendTo(ws, { type: 'groupcall:created', callId, kind, peers: [] });
+  const user = await db.getUserById(ws.userId);
+  sendTo(ws, {
+    type: 'groupcall:created',
+    callId,
+    kind,
+    peers: [],
+    sfu: livekit.enabled ? await livekit.clientConfig(callId, ws.userId, user.displayName) : null,
+  });
 }
 
 async function handleGroupInvite(ws, msg) {
@@ -325,6 +333,7 @@ async function handleGroupInvite(ws, msg) {
   const ids = Array.isArray(msg.userIds) ? msg.userIds.slice(0, 15) : [];
   for (const id of ids) {
     if (!isOnline(id)) continue;
+    const invitee = await db.getUserById(id);
     send(id, {
       type: 'groupcall:incoming',
       callId,
@@ -332,6 +341,7 @@ async function handleGroupInvite(ws, msg) {
       from: { id: from.id, username: from.username, displayName: from.displayName },
       participantCount: call.participants.size,
       iceServers: config.getIceServers(id),
+      sfu: livekit.enabled ? await livekit.clientConfig(callId, id, invitee.displayName) : null,
     });
   }
 }
@@ -364,6 +374,7 @@ async function handleGroupJoin(ws, msg) {
     peers: existing,
     iceServers: config.getIceServers(userId),
     isNew,
+    sfu: livekit.enabled ? await livekit.clientConfig(callId, userId, joiner.displayName) : null,
   });
 }
 

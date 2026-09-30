@@ -54,7 +54,17 @@ const config = {
   dbFile: process.env.DB_FILE || path.join(__dirname, '..', 'data', 'connecta.sqlite'),
   databaseUrl: process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '',
   rtc: { baseIceServers, turn },
+  // Self-hosted LiveKit SFU for group calls. When url+key+secret are all set,
+  // group calls route media through the SFU instead of a full WebRTC mesh.
+  livekit: {
+    url: process.env.LIVEKIT_URL || '',
+    apiKey: process.env.LIVEKIT_API_KEY || '',
+    apiSecret: process.env.LIVEKIT_API_SECRET || '',
+  },
 };
+config.livekit.enabled = Boolean(
+  config.livekit.url && config.livekit.apiKey && config.livekit.apiSecret
+);
 
 // --- File uploads -----------------------------------------------------------
 // Local-disk storage by default (zero config, works on both DB drivers). To move

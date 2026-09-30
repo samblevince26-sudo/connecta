@@ -34,11 +34,13 @@ session token is stored in the OS keychain; in the browser it falls back to
   signaling (SDP offers/answers and ICE candidates); audio/video never touches it.
   A public STUN server is used by default; a TURN server is required for calls that
   must cross strict NAT/firewalls.
-- **Group calls** — full-mesh WebRTC: each participant opens a PeerConnection to
-  every other participant, so no media server is needed. Offer direction is
-  deterministic (the newest joiner offers to everyone already present) to avoid
-  signaling glare. Comfortable up to ~5–6 people; for larger rooms introduce an
-  SFU (LiveKit / mediasoup) — see "Going global".
+- **Group calls** — by default full-mesh WebRTC: each participant opens a
+  PeerConnection to every other participant, so no media server is needed. Offer
+  direction is deterministic (the newest joiner offers to everyone already present)
+  to avoid signaling glare. Comfortable up to ~5–6 people. When a **LiveKit SFU** is
+  configured (see "Large group calls — LiveKit SFU" below) the server automatically
+  hands each participant a room token and the clients publish/subscribe through the
+  SFU instead, so large rooms scale to dozens of people with one upstream per client.
 
 ---
 
@@ -161,6 +163,77 @@ Installers are written to `desktop/dist/`.
 | `TURN_SECRET`  | *(unset)*                      | Shared secret with coturn (see below)     |
 | `TURN_TTL`     | `86400`                        | Lifetime of minted TURN creds (seconds)   |
 | `ICE_SERVERS`  | *(public STUN only)*           | Static ICE list (managed TURN providers)  |
+| `LIVEKIT_URL`  | *(unset)*                      | LiveKit SFU URL, e.g. `ws://127.0.0.1:7880` |
+| `LIVEKIT_API_KEY` | *(unset)*                     | LiveKit API key (paired with the server)  |
+| `LIVEKIT_API_SECRET` | *(unset)*                  | LiveKit API secret — used to mint room JWTs |
+
+---
+
+## Large group calls — LiveKit SFU
+
+Small group calls are full-mesh and need nothing extra. For **large** rooms
+(>~6 people) each client would otherwise open N−1 upstreams, which melts CPU and
+uplink. When a [LiveKit](https://livekit.io) SFU is configured, the server mints a
+per-participant room token and the clients publish one upstream and subscribe to
+everyone through the SFU. This is **opt-in**: if `LIVEKIT_*` is unset, group calls
+fall back to full mesh automatically.
+
+### 1. Run a self-hosted LiveKit server
+
+Download the `livekit-server` binary for your platform from
+https://github.com/livekit/livekit/releases and start it with a config. A minimal
+local config (`server/data/livekit.yaml`, gitignored) looks like:
+
+```yaml
+port: 7880
+bind_addresses: ["127.0.0.1"]
+rtc:
+  tcp_port: 7881
+  port_range_start: 7882
+  port_range_end: 7902
+  node_ip: "127.0.0.1"
+  use_external_ip: false
+logging:
+  level: info
+```
+
+Start it (Windows example; use your own key/secret pair):
+
+```bash
+server/bin/livekit-server.exe --config server/data/livekit.yaml \
+  --keys "APIkey: supersecretatleast32characterslong"
+```
+
+For production, set `use_external_ip: true`, open the UDP port range on your
+firewall, terminate TLS, and serve LiveKit over `wss://`.
+
+### 2. Point the Connecta server at it
+
+Add to `server/.env` (values must match the `--keys` pair above):
+
+```
+LIVEKIT_URL=http://127.0.0.1:7880
+LIVEKIT_API_KEY=APIkey
+LIVEKIT_API_SECRET=supersecretatleast32characterslong
+```
+
+Restart the server. When all three are set, group-call signaling
+(`groupcall:created` / `groupcall:joined`) carries an `sfu` object
+(`{ url, room, token }`) and clients switch to the SFU path.
+
+### 3. Client CSP note
+
+The LiveKit client connects to the SFU over `ws://`/`wss://` and validates over
+`http(s)://`. If you point at an SFU other than `localhost:7880`, add that origin to
+the `connect-src` of the Content-Security-Policy in **both**
+`desktop/renderer/index.html` and `web/index.html`, or the browser will block the
+connection. The `localhost`/`127.0.0.1` origins on port 7880 are already allowed.
+
+> **Verification status:** the server-side integration (token minting + signaling
+> payloads) is covered by `server/test/sfu.test.js`, and the client's signaling
+> connect to a local LiveKit server has been exercised in-browser. The multi-party
+> **media plane** (actual audio/video flowing through the SFU) has not been verified
+> in this repo's headless environment — test it with two real browser windows.
 
 ---
 
@@ -225,8 +298,9 @@ that lives outside this repo:
    managed TURN and set `ICE_SERVERS`. Without TURN, calls fail for users behind
    symmetric NAT / corporate firewalls (~10–20% of real-world peers).
 4. **Scaling calls** — 1-to-1 and small group calls are peer-to-peer (full mesh) and
-   need no media server. For **large** rooms (>~6 people), replace the mesh with an
-   SFU (LiveKit, mediasoup, Jitsi) so each client sends one upstream stream.
+   need no media server. For **large** rooms (>~6 people) a LiveKit SFU integration is
+   already built in — run a self-hosted LiveKit server and set `LIVEKIT_*` (see "Large
+   group calls — LiveKit SFU"), and each client sends one upstream stream instead of N−1.
 5. **Code signing** — sign Windows (EV cert) and macOS (Developer ID + notarization)
    installers so users aren't shown security warnings.
 6. **Secrets** — set a strong `JWT_SECRET`, store it in your host's secret manager,

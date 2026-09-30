@@ -18,6 +18,14 @@ process.env.DB_DRIVER = 'sqlite';
 process.env.DB_FILE = tmpDb;
 process.env.JWT_SECRET = 'test-secret-0123456789abcdef';
 process.env.NODE_ENV = 'test';
+// Default unit tests to the WebRTC mesh path. A developer .env may enable the
+// LiveKit SFU, which would silently switch group calls over; sfu.test.js opts
+// back in by setting CONNECTA_TEST_SFU=1 (and its own creds) before require.
+if (process.env.CONNECTA_TEST_SFU !== '1') {
+  process.env.LIVEKIT_URL = '';
+  process.env.LIVEKIT_API_KEY = '';
+  process.env.LIVEKIT_API_SECRET = '';
+}
 
 const { server, start, stop } = require('../src/index');
 
