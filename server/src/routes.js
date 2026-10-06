@@ -13,8 +13,8 @@ function withUser(user) {
 
 router.post('/auth/register', async (req, res) => {
   const { username, password, displayName } = req.body || {};
-  if (!username || !/^[a-zA-Z0-9_.]{3,32}$/.test(username)) {
-    return res.status(400).json({ error: 'Username must be 3-32 chars: letters, numbers, dot, underscore.' });
+  if (!username || !/^[a-zA-Z0-9_.]{3,10}$/.test(username)) {
+    return res.status(400).json({ error: 'Username must be 3-10 chars: letters, numbers, dot, underscore.' });
   }
   if (!password || password.length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters.' });

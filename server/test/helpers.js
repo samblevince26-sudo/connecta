@@ -81,9 +81,10 @@ function api(pathname, { method = 'GET', body, token } = {}) {
   });
 }
 
-// Usernames must be unique; callers pass a base and we add a random suffix.
+// Usernames must be unique and <=10 chars; callers pass a base and we add a
+// short random suffix that keeps the total within the limit.
 async function register(base, displayName) {
-  const username = base + crypto.randomBytes(3).toString('hex');
+  const username = base + crypto.randomBytes(2).toString('hex');
   return api('/api/auth/register', {
     method: 'POST',
     body: { username, password: 'password123', displayName: displayName || base },
