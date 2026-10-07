@@ -793,7 +793,12 @@ function appendMessage(m) {
 
 function scrollToBottom() { el.messages.scrollTop = el.messages.scrollHeight; }
 
-function handleIncomingMessage(m) {
+async function handleIncomingMessage(m) {
+  // A first-time sender was added on their side, so they are missing from the
+  // local contact list; refresh or the thread, unread badge and name stay blank.
+  if (!state.contacts.some((c) => c.id === m.senderId)) {
+    await loadContacts().catch(() => {});
+  }
   appendMessage(m);
   if (state.activePeer && state.activePeer.id === m.senderId) {
     wsSend({ type: 'message:read', peerId: m.senderId });
