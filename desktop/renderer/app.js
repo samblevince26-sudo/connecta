@@ -63,7 +63,8 @@ const $ = (id) => document.getElementById(id);
 const el = {
   authScreen: $('auth-screen'), appScreen: $('app-screen'),
   loginForm: $('login-form'), registerForm: $('register-form'),
-  serverUrl: $('server-url'), authError: $('auth-error'),
+  serverUrl: $('server-url'), serverRow: $('server-row'), serverToggle: $('server-toggle'),
+  authError: $('auth-error'),
   meName: $('me-name'), meAvatar: $('me-avatar'),
   contactList: $('contact-list'), connectionDot: $('connection-dot'),
   searchInput: $('search-input'), searchBtn: $('search-btn'), searchResults: $('search-results'),
@@ -124,9 +125,21 @@ function escapeHtml(s) {
 async function api(path, options = {}) {
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
-  const res = await fetch(apiBase() + path, { ...options, headers });
+  let res;
+  try {
+    res = await fetch(apiBase() + path, { ...options, headers });
+  } catch {
+    throw new Error(`Cannot reach a Connecta server at ${state.serverUrl}. Start the server or correct the Server address.`);
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    // A static host (e.g. the published PWA shell) answers 404 with HTML
+    // because it has no API; say so instead of a bare status code.
+    if (res.status === 404 && !data.error) {
+      throw new Error(`No Connecta API at ${state.serverUrl}. Point the Server field at your backend, e.g. http://localhost:4000.`);
+    }
+    throw new Error(data.error || `Request failed (${res.status})`);
+  }
   return data;
 }
 
@@ -202,6 +215,12 @@ document.querySelectorAll('.tab').forEach((tab) => {
     el.registerForm.classList.toggle('hidden', isLogin);
     el.authError.textContent = '';
   });
+});
+
+// The server address is auto-detected at boot; reveal the field only on demand.
+el.serverToggle.addEventListener('click', (e) => {
+  e.preventDefault();
+  el.serverRow.classList.toggle('hidden');
 });
 
 el.loginForm.addEventListener('submit', async (e) => {
@@ -1688,10 +1707,20 @@ el.leaveGroupBtn.addEventListener('click', leaveGroup);
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+async function hasConnectaApi(origin) {
+  try {
+    const res = await fetch(origin.replace(/\/$/, '') + '/health');
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function boot() {
   // When served by the backend over http(s) (the PWA), talk to the same origin
-  // by default. In Electron (file://) keep the configurable localhost default.
-  if (location.protocol.startsWith('http')) {
+  // by default. A static host (e.g. the published shell) has no API, so keep
+  // the configurable default or a saved server instead of the page origin.
+  if (location.protocol.startsWith('http') && await hasConnectaApi(window.location.origin)) {
     state.serverUrl = window.location.origin;
     el.serverUrl.value = state.serverUrl;
   }

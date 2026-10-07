@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f1115" />
   <meta name="description" content="Connecta — text, video and voice calls in your browser." />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; connect-src 'self' http://localhost:7880 ws://localhost:7880 http://127.0.0.1:7880 ws://127.0.0.1:7880 https: wss:; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; manifest-src 'self'" />
+        content="default-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* http://127.0.0.1:* ws://127.0.0.1:* https: wss:; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; manifest-src 'self'" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" type="image/png" href="/icons/icon-192.png" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
@@ -43,14 +43,14 @@
         <button type="submit" class="btn primary">Create account</button>
       </form>
 
-      <div class="server-row">
+      <div class="server-row hidden" id="server-row">
         <label class="inline">Server
           <input id="server-url" value="http://localhost:4000" spellcheck="false" />
         </label>
       </div>
 
       <p id="auth-error" class="error-text"></p>
-      <p class="auth-foot"><a href="/webrtc-selftest.html">Run WebRTC self-test</a></p>
+      <p class="auth-foot"><a href="#" id="server-toggle">Server settings</a> &middot; <a href="/webrtc-selftest.html">Run WebRTC self-test</a></p>
     </div>
   </section>
 
