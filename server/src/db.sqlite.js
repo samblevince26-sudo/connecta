@@ -17,7 +17,8 @@ db.exec(`
     username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
     password_hash TEXT NOT NULL,
     display_name  TEXT NOT NULL,
-    created_at    INTEGER NOT NULL
+    created_at    INTEGER NOT NULL,
+    email         TEXT
   );
 
   CREATE TABLE IF NOT EXISTS contacts (
@@ -98,6 +99,10 @@ function ensureColumn(table, column, ddl) {
 }
 ensureColumn('messages', 'attachment', 'TEXT');
 ensureColumn('group_messages', 'attachment', 'TEXT');
+// Optional, unique login alias. SQLite treats NULLs as distinct, so many users
+// can leave it empty; the index is created after the column exists.
+ensureColumn('users', 'email', 'TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (email)');
 
 function encAttachment(a) { return a ? JSON.stringify(a) : null; }
 function decAttachment(s) { if (!s) return null; try { return JSON.parse(s); } catch { return null; } }
@@ -109,9 +114,10 @@ function publicUser(row) {
 
 const stmts = {
   insertUser: db.prepare(
-    'INSERT INTO users (id, username, password_hash, display_name, created_at) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO users (id, username, password_hash, display_name, created_at, email) VALUES (?, ?, ?, ?, ?, ?)'
   ),
   userByUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
+  userByIdentifier: db.prepare('SELECT * FROM users WHERE username = ? OR email = ?'),
   userById: db.prepare('SELECT * FROM users WHERE id = ?'),
   searchUsers: db.prepare(
     'SELECT id, username, display_name FROM users WHERE username LIKE ? AND id != ? LIMIT 20'
@@ -236,15 +242,17 @@ const stmts = {
 };
 
 const data = {
-  createUser({ username, password, displayName }) {
+  createUser({ username, password, displayName, email }) {
     const id = uuidv4();
     const hash = bcrypt.hashSync(password, 12);
-    stmts.insertUser.run(id, username.trim(), hash, displayName.trim(), Date.now());
+    const mail = email ? String(email).trim().toLowerCase() : null;
+    stmts.insertUser.run(id, username.trim(), hash, displayName.trim(), Date.now(), mail);
     return publicUser(stmts.userById.get(id));
   },
 
-  verifyCredentials(username, password) {
-    const row = stmts.userByUsername.get(username.trim());
+  verifyCredentials(identifier, password) {
+    const id = String(identifier).trim();
+    const row = stmts.userByIdentifier.get(id, id.toLowerCase());
     if (!row) return null;
     if (!bcrypt.compareSync(password, row.password_hash)) return null;
     return publicUser(row);

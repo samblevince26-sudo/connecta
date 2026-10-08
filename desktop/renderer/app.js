@@ -247,6 +247,7 @@ el.registerForm.addEventListener('submit', async (e) => {
         username: $('reg-username').value.trim(),
         displayName: $('reg-display').value.trim(),
         password: $('reg-password').value,
+        email: $('reg-email').value.trim() || undefined,
       }),
     });
     await afterAuth(token, user);

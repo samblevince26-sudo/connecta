@@ -44,19 +44,21 @@ function publicUser(row) {
 }
 
 const data = {
-  async createUser({ username, password, displayName }) {
+  async createUser({ username, password, displayName, email }) {
     const id = uuidv4();
     const hash = bcrypt.hashSync(password, 12);
+    const mail = email ? String(email).trim().toLowerCase() : null;
     try {
       await query(
-        'INSERT INTO users (id, username, password_hash, display_name, created_at) VALUES ($1,$2,$3,$4,$5)',
-        [id, username.trim(), hash, displayName.trim(), Date.now()]
+        'INSERT INTO users (id, username, password_hash, display_name, created_at, email) VALUES ($1,$2,$3,$4,$5,$6)',
+        [id, username.trim(), hash, displayName.trim(), Date.now(), mail]
       );
     } catch (err) {
       // Normalize the unique-violation so routes.js reports 409 identically to
       // the SQLite driver (which throws a message containing "UNIQUE").
       if (err && err.code === '23505') {
-        throw new Error('UNIQUE constraint failed: users.username');
+        const which = String(err.constraint || '') === 'users_email_key' ? 'users.email' : 'users.username';
+        throw new Error(`UNIQUE constraint failed: ${which}`);
       }
       throw err;
     }
@@ -64,8 +66,12 @@ const data = {
     return publicUser(rows[0]);
   },
 
-  async verifyCredentials(username, password) {
-    const rows = await query('SELECT * FROM users WHERE lower(username) = lower($1)', [username.trim()]);
+  async verifyCredentials(identifier, password) {
+    const id = String(identifier).trim();
+    const rows = await query(
+      'SELECT * FROM users WHERE lower(username) = lower($1) OR email = lower($1)',
+      [id]
+    );
     const row = rows[0];
     if (!row) return null;
     if (!bcrypt.compareSync(password, row.password_hash)) return null;

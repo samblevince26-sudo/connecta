@@ -12,7 +12,7 @@ function withUser(user) {
 }
 
 router.post('/auth/register', async (req, res) => {
-  const { username, password, displayName } = req.body || {};
+  const { username, password, displayName, email } = req.body || {};
   if (!username || !/^[a-zA-Z0-9_.]{3,10}$/.test(username)) {
     return res.status(400).json({ error: 'Username must be 3-10 chars: letters, numbers, dot, underscore.' });
   }
@@ -23,13 +23,18 @@ router.post('/auth/register', async (req, res) => {
   if (!name || name.length > 64) {
     return res.status(400).json({ error: 'Display name must be 1-64 characters.' });
   }
+  const mail = email ? String(email).trim() : '';
+  if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
+    return res.status(400).json({ error: 'That email address looks invalid.' });
+  }
   try {
-    const user = await db.createUser({ username, password, displayName: name });
+    const user = await db.createUser({ username, password, displayName: name, email: mail || undefined });
     const token = signToken(user);
     res.status(201).json({ token, user });
   } catch (err) {
     if (String(err.message).includes('UNIQUE')) {
-      return res.status(409).json({ error: 'That username is already taken.' });
+      const field = String(err.message).includes('email') ? 'email' : 'username';
+      return res.status(409).json({ error: field === 'email' ? 'That email is already registered.' : 'That username is already taken.' });
     }
     res.status(500).json({ error: 'Could not create account.' });
   }
@@ -38,10 +43,10 @@ router.post('/auth/register', async (req, res) => {
 router.post('/auth/login', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password are required.' });
+    return res.status(400).json({ error: 'Username or email, and password, are required.' });
   }
   const user = await db.verifyCredentials(username, password);
-  if (!user) return res.status(401).json({ error: 'Invalid username or password.' });
+  if (!user) return res.status(401).json({ error: 'Invalid username/email or password.' });
   const token = signToken(user);
   res.json({ token, user });
 });
